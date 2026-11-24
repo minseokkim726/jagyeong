@@ -58,7 +58,17 @@ export function render(ctx) {
   <div class="banner">설정 모드입니다. 고친 내용은 초안으로 자동 보관됩니다. [새 버전으로 저장]을 누르면 새 버전이 만들어지고 오늘(${esc(ctx.today())})부터 새 기준으로 채점됩니다. 지난 기록은 당시 기준을 유지합니다. 하루 점수는 100점으로 환산되므로 배점 합이 100일 필요는 없습니다.</div>`;
   if (S.edErrs && S.edErrs.length) h += `<div class="errs" role="alert"><b>저장하지 않았습니다. 고칠 곳:</b><ul>${S.edErrs.map((e) => `<li>${esc(e.msg)}</li>`).join('')}</ul></div>`;
   h += inp('name', V.name, { label: '버전 이름' });
-  h += `<p class="note">바탕 버전: ${esc(V.from || '없음')}</p><h3>덕목과 세부 실천 항목</h3>`;
+  h += `<p class="note">바탕 버전: ${esc(V.from || '없음')}</p>`;
+  if (!V.creed) V.creed = { title: '', text: '' };
+  const cOpen = openSet(S).has('creed');
+  const cLines = String(V.creed.text || '').split(String.fromCharCode(10)).length;
+  h += `<section class="v ed">${fold('creed', cOpen, `<b>사명서 본문</b> <span class="note">${String(V.creed.text || '').trim() ? `${cLines}줄` : '비어 있음 · 오늘 화면에 안 보임'}</span>`)}`;
+  if (cOpen) {
+    h += `${inp('creed.title', V.creed.title, { label: '제목' })}
+      <label class="f" style="margin-top:8px">본문<textarea class="in creedta" data-ed="creed.text" rows="${Math.max(10, cLines + 1)}" spellcheck="false">${esc(V.creed.text)}</textarea></label>
+      <p class="note">빈 줄 = 문단 나눔 · "# " 로 시작 = 소제목 · "- " 로 시작 = 목록 · **굵게**. 비워 두면 사명서 카드가 보이지 않습니다.</p>`;
+  }
+  h += '</section><h3>덕목과 세부 실천 항목</h3>';
   const vn = V.virtues.length;
   const op = openSet(S);
   V.virtues.forEach((v, vi) => {
@@ -226,6 +236,7 @@ export function input(el, ctx) {
   if (el.dataset.ed === undefined || !S.draft) return;
   setPath(S.draft, el.dataset.ed, el.dataset.num !== undefined ? (el.value === '' ? '' : +el.value) : el.value);
   el.removeAttribute('aria-invalid');
+  if (el.classList.contains('creedta')) { el.rows = Math.max(10, el.value.split(String.fromCharCode(10)).length + 1); }
   updateSums(S);
   changed(ctx, false);
 }

@@ -9,11 +9,23 @@ export function verOf(d, versions, cur) {
   return { V: versions[cur], missing: true };
 }
 
+// 채점·생활 기록 없이 사명서 읽음만 있는 날은 "기록한 날"로 세지 않는다
+const isFilled = (o) => o && typeof o === 'object' && Object.keys(o).length > 0;
+export function isCreedOnly(d) {
+  if (!d || !d.creedAt) return false;
+  const has = isFilled(d.m) || isFilled(d.b) || isFilled(d.p) || isFilled(d.bt)
+    || (d.tOverride !== null && d.tOverride !== undefined && d.tOverride !== '') || (+d.tAdj || 0) !== 0
+    || [d.kcal, d.steps, d.weight, d.drink].some((x) => x !== null && x !== undefined && x !== '')
+    || !!String(d.memo || '').trim() || !!String(d.line || '').trim();
+  return !has;
+}
+export const isRecorded = (d) => !!d && !isCreedOnly(d);
+
 // 오늘 기록이 있으면 오늘부터, 아직 없으면 어제부터 거꾸로 센다. 기록 없는 날에서 멈춤
 export function streak(days, today) {
   let n = 0;
-  const start = days[today] ? today : addDays(today, -1);
-  for (let k = start; days[k]; k = addDays(k, -1)) n++;
+  const start = isRecorded(days[today]) ? today : addDays(today, -1);
+  for (let k = start; isRecorded(days[k]); k = addDays(k, -1)) n++;
   return n;
 }
 
@@ -37,7 +49,7 @@ export function backupReminder(dayList, lastBackupAt, now, today) {
 
 export function monthStats(days, versions, cur, ym, today) {
   const list = monthDays(ym);
-  const rec = list.filter((k) => days[k]).map((k) => { const d = days[k]; const { V } = verOf(d, versions, cur); return { k, d, V, s: scoreDay(d, V) }; });
+  const rec = list.filter((k) => isRecorded(days[k])).map((k) => { const d = days[k]; const { V } = verOf(d, versions, cur); return { k, d, V, s: scoreDay(d, V) }; });
   const avg = rec.length ? rec.reduce((a, r) => a + r.s.pct, 0) / rec.length : null;
   const ts = rec.filter((r) => r.s.T !== null);
   const tavg = ts.length ? ts.reduce((a, r) => a + r.s.T, 0) / ts.length : null;
@@ -46,8 +58,9 @@ export function monthStats(days, versions, cur, ym, today) {
   const pen = rec.reduce((a, x) => a + x.s.pen, 0);
   const drink = rec.filter((x) => x.d.drink === true).length;
   const st = rec.filter((x) => x.d.steps !== null && x.d.steps !== undefined && x.d.steps !== '' && +x.d.steps > 0);
+  const creedDays = list.filter((k) => days[k] && days[k].creedAt).length;
   const stepsAvg = st.length ? Math.round(st.reduce((a, x) => a + +x.d.steps, 0) / st.length) : null;
-  return { list, rec, count: rec.length, elapsed, avg, tavg, streak: streak(days, today), pen, drink, stepsAvg, series: list.map((k) => { const r = rec.find((x) => x.k === k); return r ? r.s.pct : null; }) };
+  return { list, rec, creedDays, count: rec.length, elapsed, avg, tavg, streak: streak(days, today), pen, drink, stepsAvg, series: list.map((k) => { const r = rec.find((x) => x.k === k); return r ? r.s.pct : null; }) };
 }
 
 // 덕목별 달성률: 덕목 id가 같은 것끼리 합친다. 순서는 현재 버전 → 그 밖의 버전에서 처음 나온 순.
@@ -68,7 +81,7 @@ export function virtueRates(rec, curV) {
 export function weekCells(days, versions, cur, today) {
   const wk = monday(today);
   return Array.from({ length: 7 }, (_, i) => {
-    const k = addDays(wk, i), d = days[k];
+    const k = addDays(wk, i), d = isRecorded(days[k]) ? days[k] : null;
     return { k, pct: d ? scoreDay(d, verOf(d, versions, cur).V).pct : null };
   });
 }

@@ -6,6 +6,7 @@ import { canDeleteVersion } from '../versions.js';
 import { penOf } from '../scoring.js';
 import { esc, fmt1, monday, iso } from '../format.js';
 import { focusOf } from './today.js';
+import { renderCreed, hasCreed } from '../creed.js';
 
 function modeBar(S) {
   return `<div class="chips" role="group" aria-label="모드"><button type="button" class="chip" data-mode="run" aria-pressed="${S.mode === 'run'}">실행 모드</button><button type="button" class="chip" data-mode="edit" aria-pressed="${S.mode === 'edit'}">설정 모드 · 사명서 고치기</button></div>`;
@@ -14,10 +15,17 @@ function modeBar(S) {
 export function render(ctx) {
   const { S } = ctx;
   if (S.mode === 'edit') return modeBar(S) + editor.render(ctx);
+  if (S.creedFull && hasCreed(ctx.curV())) {
+    const C = ctx.curV().creed;
+    return `<section class="creed full" aria-label="사명서 전문"><div class="creedfoot top"><button type="button" class="btn ghost" data-creedfull="close">← 설정으로</button></div>
+      <h2 class="ctitle">${esc(C.title || '사명서')}</h2><div class="cbody">${renderCreed(C.text)}</div>
+      <div class="creedfoot"><button type="button" class="btn ghost" data-creedfull="close">닫기</button></div></section>`;
+  }
   const V = ctx.curV(), cid = ctx.curId(), wk = monday(S.cur), f = focusOf(S, S.cur), tot = V.virtues.reduce((a, v) => a + v.pts, 0), pen = penOf(V);
   const dayList = Object.values(S.data.days);
   let h = modeBar(S);
   if (S.data.settings.draft) h += `<div class="banner">고치던 초안이 있습니다. <button type="button" class="chip" data-draft="resume">이어서</button><button type="button" class="chip" data-draft="discard">버리기</button></div>`;
+  if (hasCreed(V)) h += `<div class="chips"><button type="button" class="btn ghost" data-creedfull="open">사명서 전문 보기</button></div>`;
   h += `<h3>이번 주 집중 덕목</h3><p class="note">${esc(wk)} 주간 · 선택한 덕목은 오늘 화면에서 강조되고 추이에서 따로 보입니다. 배점은 바뀌지 않아 점수끼리 비교할 수 있습니다.</p>
   <div class="chips">${V.virtues.map((v) => `<button type="button" class="chip" data-focus="${esc(v.id)}" aria-pressed="${f === v.id}">${esc(v.name)}</button>`).join('')}<button type="button" class="chip" data-focus="" aria-pressed="${!f}">없음</button></div>
   <h3>채점 기준 · ${esc(V.name)}</h3>
@@ -78,6 +86,7 @@ export function click(t, ctx) {
     return;
   }
   if (S.mode === 'edit') { editor.click(t, ctx); return; }
+  if (ds.creedfull) { S.creedFull = ds.creedfull === 'open'; ctx.render(); window.scrollTo(0, 0); return; }
   if (imp.click(t, ctx)) return;
   if (ds.draft === 'resume') { editor.enter(ctx, true); return; }
   if (ds.draft === 'discard') { S.draft = null; ctx.repo.saveDraft(null).then(ctx.reload).then(() => { ctx.setStatus('초안을 버렸습니다'); ctx.render(); }); return; }

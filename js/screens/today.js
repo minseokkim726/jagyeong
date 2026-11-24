@@ -2,7 +2,8 @@
 import { scoreDay, tMark, penOf } from '../scoring.js';
 import { sealSVG } from '../charts.js';
 import { backupReminder } from '../stats.js';
-import { esc, fmt1, fmt2, parse, addDays, monday, WD } from '../format.js';
+import { renderCreed, hasCreed } from '../creed.js';
+import { esc, fmt1, fmt2, parse, addDays, monday, WD, hhmm } from '../format.js';
 
 export const DAYTYPES = [['weekday', '평일'], ['weekend', '주말'], ['family', '가족·행사'], ['trip', '출장·여행']];
 
@@ -21,6 +22,18 @@ function backupBanner(ctx) {
   return `<div class="banner warn">${txt} 기록은 이 기기에만 있습니다. <button type="button" class="chip" data-gobackup="1">백업하러 가기</button></div>`;
 }
 
+// 사명서 카드: 그날 읽지 않았으면 펼침, 읽었으면 한 줄로 접힘. [펼치기]로 다시 읽는다.
+function creedCard(ctx, d, V) {
+  if (!hasCreed(V)) return '';
+  const { S } = ctx;
+  const read = d.creedAt ? hhmm(new Date(d.creedAt)) : null;
+  const open = !read || S.creedOpen === S.cur;
+  const title = esc(V.creed.title || '사명서');
+  if (!open) return `<div class="creedline"><span>${title} · <b>읽음 ✓</b> ${read}</span><button type="button" class="chip" data-creed="open">펼치기</button></div>`;
+  return `<section class="creed" aria-label="${title}"><h2 class="ctitle">${title}</h2><div class="cbody">${renderCreed(V.creed.text)}</div>
+    ${read ? `<div class="creedfoot"><span class="note">읽음 ✓ ${read}</span><button type="button" class="btn ghost" data-creed="close">접기</button></div>` : '<button type="button" class="btn creedbtn" data-creed="read">읽었습니다</button>'}</section>`;
+}
+
 export function render(ctx) {
   const { S } = ctx;
   const cur = S.cur, d = ctx.getDay(cur), { V, missing } = ctx.verOfDay(d), s = scoreDay(d, V), focus = focusOf(S, cur), dt = parse(cur);
@@ -30,6 +43,7 @@ export function render(ctx) {
   h += `<div class="datebar"><button type="button" class="iconbtn" data-nav="-1" aria-label="전날">‹</button>
     <div class="d">${dt.getMonth() + 1}월 ${dt.getDate()}일 (${WD[dt.getDay()]})<small>${cur === ctx.today() ? '오늘' : esc(cur)} · ${esc(V.name)}</small></div>
     <button type="button" class="iconbtn" data-nav="1" aria-label="다음날">›</button><button type="button" class="iconbtn" data-nav="0" aria-label="오늘로">⌂</button></div>
+    ${creedCard(ctx, d, V)}
     <div class="chips" role="group" aria-label="날 유형">${DAYTYPES.map(([k, l]) => `<button type="button" class="chip" data-type="${k}" aria-pressed="${d.type === k}">${l}</button>`).join('')}</div>`;
   if (missing) h += `<div class="banner warn">버전 정의 없음: 이 기록의 사명서 버전(${esc(d.v || '없음')})이 이 기기에 없어 현재 버전으로 채점했습니다. 설정에서 그 버전을 가져오면 원래 기준으로 보입니다.</div>`;
   h += `<div class="hero"><div>${sealSVG(s, V, focus)}</div><div class="side">
@@ -94,7 +108,10 @@ export function click(t, ctx) {
   const { S } = ctx, ds = t.dataset;
   if (ds.gotab) { ctx.go(ds.gotab); return; }
   if (ds.gobackup) { ctx.go('setup'); setTimeout(() => document.getElementById('dataSec')?.scrollIntoView(), 0); return; }
-  if (ds.nav !== undefined) { ctx.flushAll(); S.cur = ds.nav === '0' ? ctx.today() : addDays(S.cur, +ds.nav); ctx.render(); return; }
+  if (ds.nav !== undefined) { ctx.flushAll(); S.creedOpen = null; S.cur = ds.nav === '0' ? ctx.today() : addDays(S.cur, +ds.nav); ctx.render(); return; }
+  if (ds.creed === 'read') { S.creedOpen = null; ctx.editDay((d) => { d.creedAt = new Date().toISOString(); }); window.scrollTo(0, 0); return; }
+  if (ds.creed === 'open') { S.creedOpen = S.cur; ctx.render(); return; }
+  if (ds.creed === 'close') { S.creedOpen = null; ctx.render(); return; }
   if (ds.type) { ctx.editDay((d) => { d.type = ds.type; }); return; }
   if (ds.mark !== undefined) {
     const id = ds.mark, val = ds.val;

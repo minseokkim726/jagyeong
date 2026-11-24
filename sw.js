@@ -1,6 +1,6 @@
 // 서비스 워커: 앱 파일을 기기에 담아 두고 네트워크 없이도 열리게 한다.
 // 앱 파일을 고치면 반드시 VERSION을 올린다.
-const VERSION = 'v1.1.0';
+const VERSION = 'v1.2.1';
 const CACHE = `jagyeong-${VERSION}`;
 const SHELL = [
   './',
@@ -11,6 +11,7 @@ const SHELL = [
   'js/repo.js',
   'js/scoring.js',
   'js/stats.js',
+  'js/creed.js',
   'js/versions.js',
   'js/charts.js',
   'js/format.js',

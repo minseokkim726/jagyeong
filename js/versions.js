@@ -24,6 +24,7 @@ export const SAMPLE_VERSION = {
       { id: 'si2a', t: '집중 시간', h: '시간 블록 합계로 계산', w: 0.6, kind: 'time' },
       { id: 'si2b', t: '할 일 목록 확인', w: 0.4 }] },
   ],
+  creed: { title: '예시 사명서', text: ['나는 오늘 하루를 **정성껏** 산다.', '', '- 몸을 돌본다', '- 시간을 아껴 쓴다'].join(String.fromCharCode(10)) },
   passive: [
     { id: 'sp1', name: '말', sub: '말 조심', rules: [
       { id: 'sp1a', t: '남을 깎아내리지 않기' },
@@ -51,6 +52,9 @@ export function normalizeVersion(src) {
     ...v, pts: num(v.pts), items: (Array.isArray(v.items) ? v.items : []).map((it) => ({ ...it, w: num(it.w) })),
   }));
   V.passive = (Array.isArray(V.passive) ? V.passive : []).map((g) => ({ ...g, rules: Array.isArray(g.rules) ? g.rules : [] }));
+  // 사명서 본문(선택). 없으면 기능을 숨긴다.
+  if (V.creed && typeof V.creed === 'object') V.creed = { title: String(V.creed.title ?? ''), text: String(V.creed.text ?? '') };
+  else delete V.creed;
   return V;
 }
 function num(x) { return x === '' || x === null || x === undefined ? NaN : +x; }

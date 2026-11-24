@@ -3,6 +3,7 @@ import { monthStats, virtueRates, weekCells } from '../stats.js';
 import { lineChartInner } from '../charts.js';
 import { esc, fmt1, parse, addMonths, WD, clone } from '../format.js';
 import { focusOf } from './today.js';
+import { hasCreed } from '../creed.js';
 
 export function render(ctx) {
   const { S } = ctx, today = ctx.today();
@@ -15,6 +16,7 @@ export function render(ctx) {
   <div class="fg"><b>${st.avg === null ? '–' : fmt1(st.avg)}</b><span>평균 점수</span></div>
   <div class="fg"><b>${st.tavg === null ? '–' : fmt1(st.tavg) + 'T'}</b><span>평균 유효시간</span></div>
   <div class="fg"><b>${none ? '–' : st.streak + '일'}</b><span>현재 연속 기록</span></div></div>
+  ${st.creedDays || hasCreed(ctx.curV()) ? `<p class="note creedstat">사명서 읽은 날 <b>${st.creedDays}일</b> / 기록한 날 ${st.count}일</p>` : ''}
   <h3>일별 점수</h3>`;
   h += none ? '<p class="empty">아직 기록이 없습니다</p>' : '<div class="fig" id="chart"><svg aria-label="일별 점수 그래프" role="img"></svg></div><p class="note">빈칸은 기록하지 않은 날입니다.</p>';
   const wk = weekCells(S.data.days, S.data.versions, ctx.curId(), today);

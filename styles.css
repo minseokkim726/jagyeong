@@ -148,3 +148,22 @@ section.ed{padding:4px 0}
   .vrow{gap:4px}
 }
 @media(prefers-reduced-motion:no-preference){.mk{transition:transform .12s}.mk:active{transform:scale(.9)}}
+/* 사명서 카드 */
+.creed{background:var(--paper);border-radius:14px;padding:16px 18px 14px;margin:8px 0 6px;border-top:3px solid var(--seal)}
+.creed .ctitle{font:800 22px/1.3 var(--serif);margin:0 0 10px;word-break:keep-all}
+.creed .cbody{font:17px/1.85 var(--serif);word-break:keep-all;overflow-wrap:anywhere}
+.creed .cbody p{margin:0 0 14px}
+.creed .cbody h4{font:800 18px/1.4 var(--serif);margin:18px 0 6px;color:var(--seal)}
+.creed .cbody ul{margin:0 0 14px;padding-left:1.2em}
+.creed .cbody li{margin:2px 0}
+.creed .cbody b{color:var(--ink);font-weight:800}
+.creedbtn{width:100%;min-height:48px;margin-top:6px;font-size:16px}
+.creedfoot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px}
+.creedfoot.top{margin:0 0 10px}
+.creed.full{margin-top:4px}
+.creedline{display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--paper);border-radius:12px;padding:4px 6px 4px 14px;margin:8px 0 2px;font-size:15px;color:var(--mute)}
+.creedline b{color:var(--seal)}
+.creedline>span{flex:1;min-width:0}
+.creedline .chip{white-space:nowrap;flex:none}
+.creedstat{margin:-4px 0 4px}
+textarea.creedta{font:16px/1.7 var(--sans);min-height:calc(10 * 1.7em + 20px)}

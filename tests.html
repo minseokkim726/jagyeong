@@ -32,7 +32,8 @@
 <script type="module">
 import { scoreDay, tFromDay, tMark, scoreSnapshot } from './js/scoring.js';
 import { logicalToday, monday, addDays } from './js/format.js';
-import { streak, monthStats, virtueRates, verOf, backupReminder } from './js/stats.js';
+import { streak, monthStats, virtueRates, verOf, backupReminder, isCreedOnly } from './js/stats.js';
+import { renderCreed, hasCreed } from './js/creed.js';
 import { normalizeVersion, validateVersion, weightWarnings, finalizeVersion, readImport, planMerge, canDeleteVersion, uniqueId, SAMPLE_VERSION } from './js/versions.js';
 
 const rows = document.getElementById('rows');
@@ -317,6 +318,55 @@ run('merge', () => {
   eq('주: at 없으면 기존 유지, 새 주는 추가', p.put.weeks.map((w) => w.week), ['2026-11-23']);
   eq('월 돌아보기 추가', p.put.months.map((m) => m.month), ['2026-11']);
   eq('미리보기: 기록·새 날·겹침·바뀜·버전', [p.preview.days, p.preview.newDays, p.preview.overlap, p.preview.replaced, p.preview.versions, p.preview.newVersions], [4, 1, 3, 1, 2, 1]);
+});
+
+group('사명서 본문 (renderCreed · creed · creedAt)');
+run('creed-render', () => {
+  const NL = String.fromCharCode(10);
+  const J = (...a) => a.join(NL);
+  eq('한 문단, 줄바꿈은 <br>', renderCreed(J('가나', '다라')), '<p>가나<br>다라</p>');
+  eq('빈 줄 = 문단 나눔', renderCreed(J('가', '', '', '나')), '<p>가</p><p>나</p>');
+  eq('"# " = 소제목', renderCreed(J('# 제목', '본문')), '<h4>제목</h4><p>본문</p>');
+  eq('"- " = 목록', renderCreed(J('- 하나', '- 둘', '끝')), '<ul><li>하나</li><li>둘</li></ul><p>끝</p>');
+  eq('**굵게**', renderCreed('나는 **매일** 읽는다'), '<p>나는 <b>매일</b> 읽는다</p>');
+  eq('짝 없는 ** 는 그대로', renderCreed('a ** b'), '<p>a ** b</p>');
+  eq('HTML 태그는 글자로', renderCreed('<scr' + 'ipt>alert(1)</scr' + 'ipt> <b>x</b>'), '<p>&lt;script&gt;alert(1)&lt;/script&gt; &lt;b&gt;x&lt;/b&gt;</p>');
+  eq('굵게 안의 태그도 글자로', renderCreed('**<img src=x onerror=1>**'), '<p><b>&lt;img src=x onerror=1&gt;</b></p>');
+  eq('"#" 뒤에 띄어쓰기 없으면 보통 글', renderCreed('#해시'), '<p>#해시</p>');
+  eq('CRLF 줄바꿈도 같게', renderCreed('가\r\n\r\n나'), '<p>가</p><p>나</p>');
+  eq('빈 글 → 빈 결과', [renderCreed(''), renderCreed(null)], ['', '']);
+  const div = document.createElement('div'); div.innerHTML = renderCreed('<img src=x onerror="window.__bad=1">');
+  eq('실제로 넣어도 태그가 생기지 않음', [div.querySelector('img'), window.__bad], [null, undefined]);
+});
+run('creed-data', () => {
+  eq('creed 없으면 숨김', [hasCreed(T26), hasCreed({ creed: { title: 't', text: '  ' } }), hasCreed({ creed: { text: '글' } })], [false, false, true]);
+  const withC = normalizeVersion({ ...clone(T26), creed: { title: '제목', text: '본문' } });
+  eq('normalizeVersion: creed 유지', withC.creed, { title: '제목', text: '본문' });
+  eq('normalizeVersion: creed 없으면 필드 없음', 'creed' in normalizeVersion(clone(T26)), false);
+  eq('normalizeVersion: 형식 틀린 creed는 버림', 'creed' in normalizeVersion({ ...clone(T26), creed: 'x' }), false);
+  eq('creed는 검사 대상 아님(비어도 통과)', validateVersion({ ...clone(T26), creed: { title: '', text: '' } }), []);
+  eq('견본에 creed 있음 + 검사 통과', [hasCreed(SAMPLE_VERSION), validateVersion(normalizeVersion(SAMPLE_VERSION))], [true, []]);
+  const NV = finalizeVersion({ ...clone(T26), creed: { title: 'a', text: 'b' } }, { id: 'n', created: 'c' });
+  eq('새 버전 저장에도 creed 유지', NV.creed, { title: 'a', text: 'b' });
+  // 가져오기·백업·아티팩트에서 creed·creedAt 유지
+  const vr = readImport(JSON.stringify({ ...T26, id: 'C1', creed: { title: 't', text: 'x' } }));
+  eq('버전 가져오기: creed 유지', normalizeVersion(vr.version).creed, { title: 't', text: 'x' });
+  const bk = readImport({ app: 'jagyeongmun', schema: 1, current: 'C1', versions: { C1: { ...T26, id: 'C1', creed: { title: 't', text: 'x' } } }, days: { '2026-11-25': { date: '2026-11-25', v: 'C1', m: {}, b: {}, p: {}, creedAt: '2026-11-25T07:12:00Z' } }, weeks: {}, months: {} });
+  const pb = planMerge({ versions: {}, days: {}, weeks: {}, months: {} }, bk);
+  eq('백업 합치기: 버전 creed·기록 creedAt 유지', [pb.put.versions[0].creed.text, pb.put.days[0].creedAt], ['x', '2026-11-25T07:12:00Z']);
+  const art = readImport({ version: 'T26', days: { '2026-11-25': { date: '2026-11-25', v: 'T26', m: { i1a: 'o' }, b: {}, p: {}, creedAt: '2026-11-25T07:12:00Z', at: 'z' } }, weeks: {}, months: {} });
+  const pa = planMerge({ versions: { T26 }, days: {}, weeks: {}, months: {} }, art);
+  eq('아티팩트 합치기: creedAt 유지', pa.put.days[0].creedAt, '2026-11-25T07:12:00Z');
+});
+run('creed-stats', () => {
+  const base = { v: 'T26', m: {}, b: {}, p: {}, bt: {}, tAdj: 0, tOverride: null, kcal: null, steps: null, weight: null, drink: null, memo: '', line: '' };
+  const only = { ...base, date: '2026-11-24', creedAt: 'x' };
+  eq('읽음만 있는 날 판정', [isCreedOnly(only), isCreedOnly({ ...only, m: { i1a: 'o' } }), isCreedOnly({ ...only, memo: '메모' }), isCreedOnly({ ...base, date: 'x' })], [true, false, false, false]);
+  eq('creedAt은 점수에 영향 없음', r2(scoreDay({ ...REF, v: 'T26', creedAt: 'x' }, T26).pct), 91.83);
+  const D = { '2026-11-23': { ...REF, v: 'T26', creedAt: 'a' }, '2026-11-24': only };
+  const st = monthStats(D, { T26 }, 'T26', '2026-11', '2026-11-24');
+  eq('읽음만 있는 날은 기록한 날·평균에서 빠짐, 읽은 날에는 셈', [st.count, r2(st.avg), st.creedDays], [1, 91.83, 2]);
+  eq('연속 기록: 오늘이 읽음만이면 어제부터', streak(D, '2026-11-24'), 1);
 });
 
 // 사용자 사명서(docs\seed-2026-beta.json)로 확인: 프로젝트 폴더 전체를 열었을 때만(앱 폴더만 열면 건너뜀)
