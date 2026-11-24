@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자경문 채점 시험</title>
+<style>
+  :root { color-scheme: light dark; --bg:#FFFFFF; --paper:#F3F4F8; --ink:#1B2440; --mute:#5B6480; --line:#DDE1EA; --seal:#C8321C; --sealbg:#FBE8E4; --ok:#2E6B4F; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#10141C; --paper:#191F2A; --ink:#E6E9F0; --mute:#9BA4B9; --line:#2C3444; --seal:#F0614A; --sealbg:#3B1E19; --ok:#7CC9A0; } }
+  body { margin: 0; padding: 16px; font-family: 'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-serif; background: var(--bg); color: var(--ink); }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  #summary { font-size: 16px; font-weight: 700; margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; background: var(--paper); }
+  #summary.fail { background: var(--sealbg); color: var(--seal); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: var(--paper); }
+  td.r { font-weight: 700; white-space: nowrap; }
+  tr.ok td.r { color: var(--ok); }
+  tr.ng td.r, tr.ng { color: var(--seal); }
+  tr.skip td.r { color: var(--mute); }
+  tr.group td { background: var(--paper); font-weight: 700; }
+  code { font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>자경문 채점 시험 (scoring.js · stats.js · versions.js)</h1>
+<div id="summary">시험 중…</div>
+<table>
+  <thead><tr><th>시험</th><th>기대값</th><th>실제값</th><th>결과</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<script type="module">
+import { scoreDay, tFromDay, tMark, scoreSnapshot } from './js/scoring.js';
+import { logicalToday, monday, addDays } from './js/format.js';
+import { streak, monthStats, virtueRates, verOf, backupReminder } from './js/stats.js';
+import { normalizeVersion, validateVersion, weightWarnings, finalizeVersion, readImport, planMerge, canDeleteVersion, uniqueId, SAMPLE_VERSION } from './js/versions.js';
+
+const rows = document.getElementById('rows');
+let pass = 0, fail = 0, skip = 0;
+function group(name) { const tr = document.createElement('tr'); tr.className = 'group'; tr.innerHTML = '<td colspan="4"></td>'; tr.firstChild.textContent = name; rows.appendChild(tr); }
+function line(name, e, a, res, cls) {
+  const tr = document.createElement('tr'); tr.className = cls;
+  for (const [txt, c] of [[name], [e, 'c'], [a, 'c'], [res, 'r']]) {
+    const td = document.createElement('td');
+    if (c === 'c') { const k = document.createElement('code'); k.textContent = txt; td.appendChild(k); } else td.textContent = txt;
+    if (c === 'r') td.className = 'r';
+    tr.appendChild(td);
+  }
+  rows.appendChild(tr);
+}
+function eq(name, actual, expected) {
+  const a = JSON.stringify(actual), e = JSON.stringify(expected);
+  const ok = a === e; ok ? pass++ : fail++;
+  line(name, e, a, ok ? '통과' : '실패', ok ? 'ok' : 'ng');
+}
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const r2 = (x) => Math.round(x * 100) / 100;
+function run(name, fn) { try { fn(); } catch (err) { eq(`${name} (예외)`, String(err && err.stack || err), '예외 없음'); } }
+
+// 중립 시험용 버전: 2026-beta와 id·배점·가중치·블록 T·구간표·규칙 수가 같고 문구는 중립(사명서 문구 없음)
+const PTS = [10, 10, 12, 6, 4, 16, 16, 16, 6];
+const ITEMS = [[['i1a', .5], ['i1b', .4], ['i1c', .1]], [['i2a', .4], ['i2b', .3], ['i2c', .2], ['i2d', .1]], [['i3a', .5], ['i3b', .4], ['i3c', .1]], [['i4a', .8], ['i4b', .2]], [['i5a', .5], ['i5b', .5]], [['i6a', .7, 'time'], ['i6b', .3]], [['i7a', .4], ['i7b', .6]], [['i8a', .5], ['i8b', .5]], [['i9a', .6], ['i9b', .4]]];
+const T26 = normalizeVersion({
+  id: 'T26', name: '시험 버전', pen: { t: 1, x: 2 },
+  tScale: [[25, 1], [20, 0.8], [15, 0.7], [10, 0.6], [6, 0.5], [0, 0.2]],
+  blocks: [6, 5, 3, 5, 4, 5, 5].map((t, i) => ({ id: 'b' + (i + 1), h: '', n: '블록' + (i + 1) + ' · 예시', t })),
+  virtues: PTS.map((pts, vi) => ({ id: 'v' + (vi + 1), name: '덕목' + (vi + 1), sub: '', model: '', pts, items: ITEMS[vi].map(([id, w, kind]) => ({ id, t: '항목 ' + id, w, ...(kind ? { kind } : {}) })) })),
+  passive: [['p10', 4], ['p11', 3], ['p12', 3], ['p13', 3]].map(([id, n]) => ({ id, name: '묶음' + id, sub: '', rules: Array.from({ length: n }, (_, k) => ({ id: id + 'abcd'[k], t: '규칙' })) })),
+});
+const ALL_ITEMS = ITEMS.flat().map((x) => x[0]).filter((id) => id !== 'i6a');
+const allO = () => Object.fromEntries(ALL_ITEMS.map((id) => [id, 'o']));
+const allBlocks = (v = 'o') => Object.fromEntries(['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7'].map((b) => [b, v]));
+const day = (o = {}) => ({ date: '2026-11-23', v: 'T26', type: 'weekday', m: {}, b: {}, bt: {}, p: {}, tAdj: 0, tOverride: null, ...o });
+const REF = { date: '2026-11-23', v: '2026-beta', type: 'weekday',
+  m: { i1a: 'o', i1b: 'o', i1c: 'o', i2a: 'o', i2b: 'o', i2c: 'o', i2d: 'o', i3a: 'o', i3b: 'o', i3c: 'o', i4a: 't', i4b: 'o', i5a: 'o', i5b: 'o', i6b: 'o', i7a: 't', i7b: 'o', i8a: 'o', i8b: 'o', i9a: 'o', i9b: 'o' },
+  b: { b1: 'o', b2: 't', b3: 'o', b4: 't', b5: 'o', b6: 't', b7: 't' }, bt: {}, p: {}, tAdj: 0, tOverride: null, kcal: null, steps: null, weight: null, drink: false, memo: '', line: '' };
+const snap = (s) => ({ raw: r2(s.raw), max: r2(s.max), T: s.T, pen: s.pen, pct: r2(s.pct) });
+
+group('기준 기록 (명세 4장, 2026-11-23)');
+run('11-23 기록 → raw 88.16, max 96, T 23, pen 0, pct 91.83', () => eq('11-23 기록 → raw 88.16, max 96, T 23, pen 0, pct 91.83', snap(scoreDay(REF, T26)), { raw: 88.16, max: 96, T: 23, pen: 0, pct: 91.83 }));
+run('저장용 계산값', () => eq('저장용 계산값(score)', scoreSnapshot(REF, T26), { pct: 91.83, raw: 88.16, max: 96, T: 23, pen: 0 }));
+
+group('추가 검증 사례 3건 (명세 4장)');
+run('c1', () => eq('전부 ○ + 모든 블록 온전히(33T) → 100점', snap(scoreDay(day({ m: allO(), b: allBlocks() }), T26)).pct, 100));
+run('c2', () => {
+  const s = scoreDay(day({ m: { i6b: 'o' }, b: { b1: 'o', b2: 't' } }), T26);
+  eq('b1 온전히 + b2 보통 = 8.5T', s.T, 8.5);
+  eq('8.5T → 50%', tMark(s.T, T26), 0.5);
+  eq('v6 = 16×0.7×0.5 + 16×0.3 = 10.4', r2(s.per.v6.r), 10.4);
+});
+run('c3', () => {
+  const m = allO(); m.i1b = 'na'; m.i7b = 't';
+  const s = scoreDay(day({ m, b: allBlocks(), p: { p12a: 'x' } }), T26);
+  eq('i1b – → 만점 92', r2(s.max), 92);
+  eq('(92 − 4.8) ÷ 92 × 100 − 2 = 92.78', r2(s.pct), 92.78);
+});
+
+group('○ △ ✕ – 와 미입력');
+run('marks', () => {
+  const V = normalizeVersion({ name: 'x', tScale: [[0, 1]], blocks: [], passive: [], virtues: [{ id: 'a', name: 'A', pts: 10, items: [{ id: 'x1', t: 'x', w: 0.5 }, { id: 'x2', t: 'y', w: 0.5 }] }] });
+  eq('○ = 1', scoreDay({ m: { x1: 'o', x2: 'o' }, b: {}, p: {} }, V).raw, 10);
+  eq('△ = 0.5', scoreDay({ m: { x1: 't', x2: 'o' }, b: {}, p: {} }, V).raw, 7.5);
+  eq('✕ = 0', scoreDay({ m: { x1: 'x', x2: 'o' }, b: {}, p: {} }, V).raw, 5);
+  const na = scoreDay({ m: { x1: 'na', x2: 'o' }, b: {}, p: {} }, V);
+  eq('– 는 받은 점수·만점 양쪽에서 빠짐', [na.raw, na.max, na.pct], [5, 5, 100]);
+  const un = scoreDay({ m: { x2: 'o' }, b: {}, p: {} }, V);
+  eq('미입력은 0점, 만점에는 포함', [un.raw, un.max, un.pct, un.filled, un.count], [5, 10, 50, 1, 2]);
+  const allNa = scoreDay(day({ m: { ...allO(), i5a: 'na', i5b: 'na' }, b: allBlocks() }), T26);
+  eq('덕목 전체 – → 그 덕목 r=0, m=0', allNa.per.v5, { r: 0, m: 0 });
+  eq('덕목 전체 – → 만점 96−4 = 92, 100점', [r2(allNa.max), r2(allNa.pct)], [92, 100]);
+  eq('만점 0이면 0점', scoreDay({ m: { x1: 'na', x2: 'na' }, b: {}, p: {} }, V).pct, 0);
+});
+
+group('유효시간 T');
+run('tscale', () => {
+  for (const [T, v] of [[24.5, 0.8], [25, 1], [19.5, 0.7], [20, 0.8], [5.5, 0.2], [6, 0.5], [0, 0.2], [100, 1]]) eq(`${T}T → ${v * 100}%`, tMark(T, T26), v);
+});
+run('tsum', () => {
+  eq('블록을 하나도 안 고르면 T 미입력(null)', tFromDay(day(), T26), null);
+  const s = scoreDay(day({ m: { i6b: 'o' } }), T26);
+  eq('T 미입력이면 유효시간 항목도 미입력(0점, 만점 포함)', [s.T, s.filled, r2(s.per.v6.r), r2(s.per.v6.m)], [null, 1, 4.8, 16]);
+  eq('블록 합계: 온전히 1 / 보통 0.5 / 미흡 0', tFromDay(day({ b: { b1: 'o', b2: 't', b3: 'x' } }), T26), 8.5);
+  eq('보정 +2', tFromDay(day({ b: { b1: 'o' }, tAdj: 2 }), T26), 8);
+  eq('보정으로 0 미만이면 0', tFromDay(day({ b: { b1: 'o' }, tAdj: -10 }), T26), 0);
+  eq('직접 입력이 블록·보정보다 우선', tFromDay(day({ b: { b1: 'o' }, tAdj: 2, tOverride: 12 }), T26), 12);
+  eq('직접 입력은 블록이 없어도 쓰임', tFromDay(day({ tOverride: 3 }), T26), 3);
+  eq('직접 입력 0도 값으로 인정', tFromDay(day({ b: { b1: 'o' }, tOverride: 0 }), T26), 0);
+  eq('직접 입력 빈칸이면 블록 사용', tFromDay(day({ b: { b1: 'o' }, tOverride: '' }), T26), 6);
+  eq('보정만 있고 블록 없으면 미입력', tFromDay(day({ tAdj: 3 }), T26), null);
+  const na = scoreDay(day({ m: { i6a: 'na', i6b: 'o' }, b: allBlocks() }), T26);
+  eq('유효시간 – → 만점에서 빠짐', r2(na.per.v6.m), 4.8);
+});
+
+group('Passive 감점');
+run('pen', () => {
+  const base = { m: allO(), b: allBlocks() };
+  eq('△ −1', scoreDay(day({ ...base, p: { p10a: 't' } }), T26).pct, 99);
+  eq('✕ −2', scoreDay(day({ ...base, p: { p10a: 'x' } }), T26).pct, 98);
+  eq('여러 개 합산', scoreDay(day({ ...base, p: { p10a: 'x', p11b: 't', p13c: 'x' } }), T26).pen, 5);
+  const all13 = Object.fromEntries(T26.passive.flatMap((g) => g.rules.map((r) => [r.id, 'x'])));
+  eq('0점 바닥: 미입력 + ✕ 13개 → 0', scoreDay(day({ p: all13 }), T26).pct, 0);
+  const V2 = { ...T26, pen: { t: 3, x: 5 } };
+  eq('감점 값은 버전 정의의 pen을 씀(△3, ✕5)', scoreDay(day({ ...base, p: { p10a: 't', p10b: 'x' } }), V2).pen, 8);
+  const V3 = { ...T26 }; delete V3.pen;
+  eq('pen이 없으면 △1 ✕2', scoreDay(day({ ...base, p: { p10a: 't', p10b: 'x' } }), V3).pen, 3);
+});
+
+group('날짜');
+run('dates', () => {
+  eq('새벽 3:59 → 전날', logicalToday(new Date(2026, 10, 24, 3, 59)), '2026-11-23');
+  eq('새벽 4:00 → 그날', logicalToday(new Date(2026, 10, 24, 4, 0)), '2026-11-24');
+  eq('1월 1일 3:00 → 전년 12월 31일', logicalToday(new Date(2027, 0, 1, 3, 0)), '2026-12-31');
+  eq('일요일 → 그 주 월요일', monday('2026-11-29'), '2026-11-23');
+  eq('월요일 → 그대로', monday('2026-11-23'), '2026-11-23');
+  eq('연말: 2027-01-01(금) → 2026-12-28', monday('2027-01-01'), '2026-12-28');
+  eq('연초 일요일: 2026-01-04 → 2025-12-29', monday('2026-01-04'), '2025-12-29');
+  eq('하루 더하기(월말)', addDays('2026-11-30', 1), '2026-12-01');
+});
+
+group('추이 (stats.js)');
+run('streak', () => {
+  const D = { '2026-11-24': {}, '2026-11-23': {}, '2026-11-21': {} };
+  eq('연속 기록: 오늘부터 거꾸로, 빈 날에서 멈춤', streak(D, '2026-11-24'), 2);
+  eq('오늘 기록이 아직 없으면 어제부터 셈', streak(D, '2026-11-25'), 2);
+  eq('오늘·어제 모두 없으면 0', streak(D, '2026-11-26'), 0);
+  eq('오늘 기록이 있으면 오늘부터', streak({ ...D, '2026-11-25': {} }, '2026-11-25'), 3);
+  eq('월을 넘어 이어짐', streak({ '2026-12-01': {}, '2026-11-30': {}, '2026-11-29': {} }, '2026-12-01'), 3);
+});
+run('month', () => {
+  const vs = { T26 };
+  const D = {
+    '2026-11-23': { ...REF, v: 'T26', steps: 8000 },
+    '2026-11-24': day({ date: '2026-11-24', m: allO(), b: allBlocks(), drink: true, steps: 4000, p: { p10a: 'x' } }),
+  };
+  const st = monthStats(D, vs, 'T26', '2026-11', '2026-11-24');
+  eq('기록한 날 / 지난 날', [st.count, st.elapsed], [2, 24]);
+  eq('평균 점수', r2(st.avg), r2((91.83333 + 98) / 2));
+  eq('평균 유효시간', st.tavg, 28);
+  eq('Passive 합계·음주·평균 걸음', [st.pen, st.drink, st.stepsAvg], [2, 1, 6000]);
+  eq('선 그래프: 기록 없는 날은 null', st.series.slice(21, 24).map((x) => x === null ? null : Math.round(x)), [null, 92, 98]);
+  const empty = monthStats({}, vs, 'T26', '2026-10', '2026-11-24');
+  eq('기록 없는 달: 평균 없음, 지난 날 = 그달 전체', [empty.count, empty.avg, empty.elapsed], [0, null, 31]);
+  eq('미래 달: 지난 날 0', monthStats({}, vs, 'T26', '2026-12', '2026-11-24').elapsed, 0);
+});
+run('mixed', () => {
+  // 버전이 섞인 달: 덕목 id가 같은 것끼리 합친다
+  const A = normalizeVersion({ id: 'A', name: 'A', tScale: [[0, 1]], blocks: [], passive: [], virtues: [{ id: 'k', name: '갑', pts: 10, items: [{ id: 'a1', t: 'a', w: 1 }] }] });
+  const B = normalizeVersion({ id: 'B', name: 'B', tScale: [[0, 1]], blocks: [], passive: [], virtues: [{ id: 'k', name: '갑2', pts: 30, items: [{ id: 'a1', t: 'a', w: 1 }] }, { id: 'n', name: '새', pts: 5, items: [{ id: 'n1', t: 'n', w: 1 }] }] });
+  const D = { '2026-11-01': { date: '2026-11-01', v: 'A', m: { a1: 'o' }, b: {}, p: {} }, '2026-11-02': { date: '2026-11-02', v: 'B', m: { a1: 'x', n1: 'o' }, b: {}, p: {} } };
+  const st = monthStats(D, { A, B }, 'B', '2026-11', '2026-11-30');
+  const vr = virtueRates(st.rec, B);
+  eq('같은 id 덕목 합산: (10+0)/(10+30)=25%', vr.map((x) => [x.id, Math.round(x.pct)]), [['k', 25], ['n', 100]]);
+});
+
+group('백업 알림 시점 (backupReminder)');
+run('backup', () => {
+  const now = new Date(2026, 11, 10, 21, 0); // 12-10 21:00
+  const T = '2026-12-10';
+  const dd = (date, at) => ({ date, at });
+  eq('기록이 없으면 안 띄움', backupReminder([], null, now, T).show, false);
+  eq('백업 없음 + 가장 오래된 기록 6일 전 → 안 띄움', backupReminder([dd('2026-12-04'), dd('2026-12-10')], null, now, T).show, false);
+  eq('백업 없음 + 가장 오래된 기록 7일 전 → 띄움', backupReminder([dd('2026-12-10'), dd('2026-12-03')], null, now, T), { show: true, never: true, days: 7 });
+  const last = new Date(2026, 11, 3, 21, 0).toISOString(); // 정확히 7일 전
+  const last6 = new Date(2026, 11, 4, 22, 0).toISOString(); // 6일 하고 조금
+  eq('백업 뒤 6일 → 안 띄움(고친 기록 있어도)', backupReminder([dd('2026-12-09', new Date(2026, 11, 9).toISOString())], last6, now, T).show, false);
+  eq('백업 뒤 7일 + 그 뒤 고친 기록 있음 → 띄움', backupReminder([dd('2026-12-01', new Date(2026, 11, 1).toISOString()), dd('2026-12-09', new Date(2026, 11, 9).toISOString())], last, now, T), { show: true, never: false, days: 7 });
+  eq('백업 뒤 7일 + 그 뒤 고친 기록 없음 → 안 띄움', backupReminder([dd('2026-12-01', new Date(2026, 11, 1).toISOString())], last, now, T).show, false);
+  eq('at 없는 기록은 고친 것으로 안 봄', backupReminder([dd('2026-12-01')], last, now, T).show, false);
+});
+
+group('버전 변경 뒤 지난 기록 점수 불변');
+run('ver', () => {
+  const old = { ...REF, v: 'T26' };
+  const versions = { T26: clone(T26) };
+  const before = scoreDay(old, verOf(old, versions, 'T26').V).pct;
+  const draft = clone(T26); draft.virtues[0].pts = 50; draft.pen = { t: 5, x: 9 }; draft.tScale = [[0, 1]]; draft.name = '새 버전';
+  const NV = finalizeVersion(draft, { id: '20270101-090000', created: '2027-01-01T09:00:00Z', from: 'T26' });
+  versions[NV.id] = NV;
+  const after = scoreDay(old, verOf(old, versions, NV.id).V).pct;
+  eq('현재 버전을 바꿔도 지난 기록은 그날 버전으로 채점', r2(after), r2(before));
+  eq('새 버전을 만들어도 이전 정의는 한 글자도 안 바뀜', JSON.stringify(versions.T26), JSON.stringify(T26));
+  eq('새 버전 필드: id, created, from', [NV.id, NV.created, NV.from], ['20270101-090000', '2027-01-01T09:00:00Z', 'T26']);
+  eq('새 버전으로 채점하면 다른 점수', r2(scoreDay({ ...old, v: NV.id }, NV).pct) !== r2(before), true);
+  const lost = { ...old, v: 'gone' };
+  const r = verOf(lost, versions, 'T26');
+  eq('버전 정의가 없으면 현재 버전으로 채점 + 없음 표시', [r.V.id, r.missing], ['T26', true]);
+  eq('기록이 쓰는 버전은 삭제 불가', canDeleteVersion('T26', 'X', [old]).ok, false);
+  eq('현재 버전은 삭제 불가', canDeleteVersion('X', 'X', []).ok, false);
+  eq('안 쓰는 버전은 삭제 가능', canDeleteVersion('Y', 'X', [old]).ok, true);
+  eq('같은 id가 있으면 새 id', uniqueId('T26', versions, () => 'NEW'), 'NEW');
+  eq('없는 id면 그대로', uniqueId('Z', versions, () => 'NEW'), 'Z');
+});
+
+group('저장 전 검사 (validateVersion)');
+const errOf = (mut) => { const v = clone(T26); mut(v); return validateVersion(v).map((e) => e.path); };
+run('valid', () => {
+  eq('시험 버전은 통과', validateVersion(T26), []);
+  eq('견본(예시 사명서)도 통과', validateVersion(normalizeVersion(SAMPLE_VERSION)), []);
+  eq('버전 이름 없음', errOf((v) => { v.name = ' '; }), ['name']);
+  eq('덕목 0개', errOf((v) => { v.virtues = []; }), ['virtues', 'time']);
+  eq('덕목 이름 없음', errOf((v) => { v.virtues[0].name = ''; }), ['virtues.0.name']);
+  eq('배점 0', errOf((v) => { v.virtues[0].pts = 0; }), ['virtues.0.pts']);
+  eq('배점 빈칸', errOf((v) => { v.virtues[0].pts = ''; }), ['virtues.0.pts']);
+  eq('항목 0개', errOf((v) => { v.virtues[0].items = []; }), ['virtues.0.items']);
+  eq('항목 문구 없음', errOf((v) => { v.virtues[1].items[2].t = ''; }), ['virtues.1.items.2.t']);
+  eq('가중치 음수', errOf((v) => { v.virtues[1].items[0].w = -0.1; }), ['virtues.1.items.0.w']);
+  eq('가중치 빈칸', errOf((v) => { v.virtues[1].items[0].w = ''; }), ['virtues.1.items.0.w']);
+  eq('유효시간 항목 0개', errOf((v) => { delete v.virtues[5].items[0].kind; }), ['time']);
+  eq('유효시간 항목 2개', errOf((v) => { v.virtues[5].items[1].kind = 'time'; }), ['time']);
+  eq('블록 T 음수', errOf((v) => { v.blocks[2].t = -1; }), ['blocks.2.t']);
+  eq('구간표 기준 중복', errOf((v) => { v.tScale[1][0] = 25; }), ['tScale.1.0']);
+  eq('구간표 비율 1 초과', errOf((v) => { v.tScale[0][1] = 1.5; }), ['tScale.0.1']);
+  eq('구간표 비율 음수', errOf((v) => { v.tScale[0][1] = -0.1; }), ['tScale.0.1']);
+  eq('구간표 줄 없음', errOf((v) => { v.tScale = []; }), ['tScale']);
+  eq('감점 △ 음수', errOf((v) => { v.pen.t = -1; }), ['pen.t']);
+  eq('감점 ✕ 빈칸', errOf((v) => { v.pen.x = ''; }), ['pen.x']);
+  const w = clone(T26); w.virtues[0].items[0].w = 0.9;
+  eq('가중치 합 ≠ 1은 경고만(저장 허용)', [validateVersion(w).length, weightWarnings(w).map((x) => x.vi)], [0, [0]]);
+  const s = clone(T26); s.tScale = [[0, 0.2], [25, 1], [10, 0.6]];
+  eq('저장할 때 구간표를 기준이 큰 순으로', finalizeVersion(s, { id: 'x', created: 'c' }).tScale, [[25, 1], [10, 0.6], [0, 0.2]]);
+  const n = clone(T26); n.virtues[0].pts = '12'; n.blocks[0].t = '4.5';
+  const f = finalizeVersion(n, { id: 'x', created: 'c' });
+  eq('저장할 때 숫자로 바꿈', [f.virtues[0].pts, f.blocks[0].t], [12, 4.5]);
+});
+
+group('옛 블록 형식 변환');
+run('oldblock', () => {
+  const V = normalizeVersion({ name: 'x', blocks: [{ id: 'b1', h: '06:00–09:00', n: '새벽 · 걷기, 준비', t: 6 }, { id: 'b2', h: '', n: '이름만', t: 2 }, { id: 'b3', n: '새', ex: '이미 새 형식', t: 1 }], virtues: [], passive: [], tScale: [] });
+  eq('n의 " · " 앞은 이름, 뒤는 예시', [V.blocks[0].n, V.blocks[0].ex], ['새벽', '걷기, 준비']);
+  eq('" · "가 없으면 예시는 빈칸', [V.blocks[1].n, V.blocks[1].ex], ['이름만', '']);
+  eq('이미 새 형식이면 그대로', [V.blocks[2].n, V.blocks[2].ex], ['새', '이미 새 형식']);
+  eq('pen이 없으면 {t:1,x:2}', V.pen, { t: 1, x: 2 });
+  eq('블록 변환 뒤에도 T 계산 같음', tFromDay(REF, T26), 23);
+});
+
+group('가져오기 읽기·합치기');
+run('import', () => {
+  eq('JSON 아님 → 거부', readImport('{oops').ok, false);
+  eq('다른 앱 → 거부', readImport({ app: 'jeolju', schema: 1 }).ok, false);
+  eq('schema 다름 → 거부', readImport({ app: 'jagyeongmun', schema: 9, days: {} }).ok, false);
+  eq('날짜 형식 틀림 → 거부', readImport({ app: 'jagyeongmun', schema: 1, days: { '11/23': {} } }).ok, false);
+  eq('알 수 없는 형식 → 거부', readImport({ hello: 1 }).ok, false);
+  eq('사명서 정의 하나 → version', readImport(JSON.stringify(T26)).kind, 'version');
+  const bk = readImport({ exportedAt: 'x', app: 'jagyeongmun', schema: 1, current: 'T26', versions: { T26 }, days: { '2026-11-23': { ...REF, v: 'T26' } }, weeks: {}, months: {} });
+  eq('이 앱 백업 → backup, current 유지', [bk.ok, bk.kind, bk.current], [true, 'backup', 'T26']);
+  const art = readImport({ version: '2026-beta', days: { '2026-11-23': REF }, weeks: { '2026-11-23': { focus: 'v6', week: '2026-11-23' } }, months: {} });
+  eq('아티팩트 기록 {version, days, weeks, months} → artifact', [art.ok, art.kind, Object.keys(art.days).length, art.weeks['2026-11-23'].focus], [true, 'artifact', 1, 'v6']);
+  const pArt = planMerge({ versions: {}, days: {}, weeks: {}, months: {} }, art);
+  eq('아티팩트: 2026-beta가 없으면 missing으로 알림', pArt.missing, ['2026-beta']);
+  const pArt2 = planMerge({ versions: { '2026-beta': T26 }, days: {}, weeks: {}, months: {} }, art);
+  eq('아티팩트: 버전이 있으면 그대로 합침', [pArt2.missing, pArt2.put.days.length, pArt2.put.weeks.length], [[], 1, 1]);
+});
+run('merge', () => {
+  const ex = {
+    versions: { T26: { ...T26, name: '기존' } },
+    days: { '2026-11-20': { date: '2026-11-20', v: 'T26', memo: '기존', at: '2026-11-20T12:00:00Z' }, '2026-11-21': { date: '2026-11-21', v: 'T26', memo: '기존', at: '2026-11-21T12:00:00Z' }, '2026-11-22': { date: '2026-11-22', v: 'T26', memo: '기존' } },
+    weeks: { '2026-11-16': { week: '2026-11-16', focus: 'v1' } }, months: {},
+  };
+  const inc = {
+    versions: { T26: { ...T26, name: '들어온 것' }, NEW: { ...T26, id: 'NEW', name: '새 버전' } },
+    days: {
+      '2026-11-20': { date: '2026-11-20', v: 'T26', memo: '늦은 것', at: '2026-11-20T13:00:00Z', auto: { i1a: { val: 'o', src: 'health', at: 'x' } } },
+      '2026-11-21': { date: '2026-11-21', v: 'T26', memo: '이른 것', at: '2026-11-21T09:00:00Z' },
+      '2026-11-22': { date: '2026-11-22', v: 'T26', memo: 'at 있음', at: '2026-11-22T09:00:00Z' },
+      '2026-11-23': { date: '2026-11-23', v: 'T26', memo: '새 날', auto: { i3a: { val: 'o', src: 'x', detail: 'd', at: 'y' } } },
+    },
+    weeks: { '2026-11-16': { week: '2026-11-16', focus: 'v9' }, '2026-11-23': { week: '2026-11-23', focus: 'v2' } }, months: { '2026-11': { month: '2026-11', good: 'g', bad: 'b' } },
+  };
+  const p = planMerge(ex, inc);
+  const put = Object.fromEntries(p.put.days.map((d) => [d.date, d]));
+  eq('같은 날짜: at이 늦은 쪽(들어온 것)', put['2026-11-20']?.memo, '늦은 것');
+  eq('같은 날짜: 기존이 더 늦으면 기존 유지', put['2026-11-21'], undefined);
+  eq('같은 날짜: 기존에 at이 없으면 기존 유지', put['2026-11-22'], undefined);
+  eq('새 날짜는 추가', put['2026-11-23']?.memo, '새 날');
+  eq('auto 필드 보존', [put['2026-11-20']?.auto?.i1a?.src, put['2026-11-23']?.auto?.i3a?.detail], ['health', 'd']);
+  eq('같은 id 버전은 기존 유지, 새 id만 추가', p.put.versions.map((v) => v.id), ['NEW']);
+  eq('주: at 없으면 기존 유지, 새 주는 추가', p.put.weeks.map((w) => w.week), ['2026-11-23']);
+  eq('월 돌아보기 추가', p.put.months.map((m) => m.month), ['2026-11']);
+  eq('미리보기: 기록·새 날·겹침·바뀜·버전', [p.preview.days, p.preview.newDays, p.preview.overlap, p.preview.replaced, p.preview.versions, p.preview.newVersions], [4, 1, 3, 1, 2, 1]);
+});
+
+// 사용자 사명서(docs\seed-2026-beta.json)로 확인: 프로젝트 폴더 전체를 열었을 때만(앱 폴더만 열면 건너뜀)
+group('사용자 사명서 정의(docs) 확인 — 앱 폴더 밖 파일');
+try {
+  const res = await fetch('../docs/seed-2026-beta.json', { cache: 'no-store' });
+  if (!res.ok) throw new Error('없음');
+  const r = readImport(await res.text());
+  const V = normalizeVersion(r.version);
+  eq('seed: 검사 통과', validateVersion(V), []);
+  eq('seed: 덕목 9 · 항목 22(유효시간 포함) · 블록 7 · 규칙 13', [V.virtues.length, V.virtues.reduce((a, v) => a + v.items.length, 0), V.blocks.length, V.passive.reduce((a, g) => a + g.rules.length, 0)], [9, 22, 7, 13]);
+  eq('seed: 배점 합 96', V.virtues.reduce((a, v) => a + v.pts, 0), 96);
+  eq('seed: 11-23 기록 = 91.83 (88.16 / 96, 23T)', snap(scoreDay(REF, V)), { raw: 88.16, max: 96, T: 23, pen: 0, pct: 91.83 });
+} catch (e) {
+  skip++; line('seed 파일을 읽을 수 없어 건너뜀 (앱 폴더만 연 경우 정상)', '-', String(e.message || e), '건너뜀', 'skip');
+}
+
+const sum = document.getElementById('summary');
+sum.textContent = `${fail ? '실패 있음' : '전부 통과'} · 통과 ${pass} · 실패 ${fail}${skip ? ` · 건너뜀 ${skip}` : ''}`;
+sum.className = fail ? 'fail' : 'pass';
+document.title = `시험 ${fail ? '실패' : '통과'} ${pass}/${pass + fail}`;
+</script>
+</body>
+</html>
