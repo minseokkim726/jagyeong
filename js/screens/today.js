@@ -23,9 +23,9 @@ function backupBanner(ctx) {
 }
 
 // 사명서 카드: 그날 읽지 않았으면 펼침, 읽었으면 한 줄로 접힘. [펼치기]로 다시 읽는다.
-function creedCard(ctx, d, V) {
+// V는 항상 현재 버전(settings.cur)이다. 그날 기록이 묶인 버전과 상관없다.
+export function creedCard(S, d, V) {
   if (!hasCreed(V)) return '';
-  const { S } = ctx;
   const read = d.creedAt ? hhmm(new Date(d.creedAt)) : null;
   const open = !read || S.creedOpen === S.cur;
   const title = esc(V.creed.title || '사명서');
@@ -43,7 +43,7 @@ export function render(ctx) {
   h += `<div class="datebar"><button type="button" class="iconbtn" data-nav="-1" aria-label="전날">‹</button>
     <div class="d">${dt.getMonth() + 1}월 ${dt.getDate()}일 (${WD[dt.getDay()]})<small>${cur === ctx.today() ? '오늘' : esc(cur)} · ${esc(V.name)}</small></div>
     <button type="button" class="iconbtn" data-nav="1" aria-label="다음날">›</button><button type="button" class="iconbtn" data-nav="0" aria-label="오늘로">⌂</button></div>
-    ${creedCard(ctx, d, V)}
+    ${creedCard(S, d, ctx.curV())}
     <div class="chips" role="group" aria-label="날 유형">${DAYTYPES.map(([k, l]) => `<button type="button" class="chip" data-type="${k}" aria-pressed="${d.type === k}">${l}</button>`).join('')}</div>`;
   if (missing) h += `<div class="banner warn">버전 정의 없음: 이 기록의 사명서 버전(${esc(d.v || '없음')})이 이 기기에 없어 현재 버전으로 채점했습니다. 설정에서 그 버전을 가져오면 원래 기준으로 보입니다.</div>`;
   h += `<div class="hero"><div>${sealSVG(s, V, focus)}</div><div class="side">

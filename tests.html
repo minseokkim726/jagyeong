@@ -34,6 +34,7 @@ import { scoreDay, tFromDay, tMark, scoreSnapshot } from './js/scoring.js';
 import { logicalToday, monday, addDays } from './js/format.js';
 import { streak, monthStats, virtueRates, verOf, backupReminder, isCreedOnly } from './js/stats.js';
 import { renderCreed, hasCreed } from './js/creed.js';
+import { render as renderToday, creedCard } from './js/screens/today.js';
 import { normalizeVersion, validateVersion, weightWarnings, finalizeVersion, readImport, planMerge, canDeleteVersion, uniqueId, SAMPLE_VERSION } from './js/versions.js';
 
 const rows = document.getElementById('rows');
@@ -367,6 +368,40 @@ run('creed-stats', () => {
   const st = monthStats(D, { T26 }, 'T26', '2026-11', '2026-11-24');
   eq('읽음만 있는 날은 기록한 날·평균에서 빠짐, 읽은 날에는 셈', [st.count, r2(st.avg), st.creedDays], [1, 91.83, 2]);
   eq('연속 기록: 오늘이 읽음만이면 어제부터', streak(D, '2026-11-24'), 1);
+});
+
+run('creed-current', () => {
+  // 카드는 항상 현재 버전(settings.cur)의 creed를 보여 준다 (v1.4)
+  const OLD = { ...clone(T26), id: 'OLD' };
+  const NEW = normalizeVersion({ ...clone(T26), id: 'NEW', name: '새 버전', creed: { title: '현재 제목', text: '현재 본문' } });
+  const mk = (cur, days) => {
+    const S = { cur: '2026-11-25', creedOpen: null, tab: 'today', data: { versions: { OLD, NEW, T26 }, days, weeks: {}, months: {}, settings: { id: 'settings', cur } } };
+    const curId = () => S.data.settings.cur;
+    const curV = () => S.data.versions[curId()];
+    const ctx = { S, curId, curV, today: () => '2026-11-25',
+      getDay: (k) => S.data.days[k] || { date: k, v: curId(), type: 'weekday', m: {}, b: {}, bt: {}, p: {}, tAdj: 0, tOverride: null, memo: '', line: '' },
+      verOfDay: (d) => S.data.versions[d.v] ? { V: S.data.versions[d.v], missing: false } : { V: curV(), missing: false } };
+    return ctx;
+  };
+  const day = (date, extra) => ({ date, v: 'OLD', type: 'weekday', m: { i1a: 'o' }, b: {}, bt: {}, p: {}, tAdj: 0, tOverride: null, memo: '', line: '', ...extra });
+  const box = document.createElement('div');
+  const look = (ctx) => { box.innerHTML = renderToday(ctx); const c = box.querySelector('.creed .ctitle, .creedline span'); return c ? c.textContent : null; };
+  // (1) 오늘 기록이 creed 없는 옛 버전에 묶여 있어도, 현재 버전에 creed가 있으면 카드가 보인다
+  const c1 = mk('NEW', { '2026-11-25': day('2026-11-25') });
+  eq('(1) 옛 버전 기록이어도 현재 버전 사명서 카드 보임', [look(c1), !!box.querySelector('.creed .cbody'), box.querySelector('.cbody') && box.querySelector('.cbody').textContent], ['현재 제목', true, '현재 본문']);
+  eq('(1) 점수는 그날 기록의 버전(OLD)으로 그대로', box.querySelector('.datebar small').textContent.includes(OLD.name), true);
+  // (2) 지난 날로 이동해도 현재 버전 본문
+  const c2 = mk('NEW', { '2026-11-20': day('2026-11-20', { v: 'OLD' }), '2026-11-21': day('2026-11-21', { v: 'OLD', creedAt: '2026-11-21T07:12:00' }) });
+  c2.S.cur = '2026-11-20';
+  eq('(2) 지난 날(옛 버전 기록): 현재 버전 본문 펼침', [look(c2), box.querySelector('.cbody') && box.querySelector('.cbody').textContent], ['현재 제목', '현재 본문']);
+  c2.S.cur = '2026-11-21';
+  eq('(2) 지난 날(읽음): 현재 버전 제목으로 한 줄 접힘', [look(c2).startsWith('현재 제목 · 읽음 ✓'), !!box.querySelector('.creed')], [true, false]);
+  c2.S.cur = '2026-11-19';
+  eq('(2) 기록 없는 지난 날도 현재 버전 본문', look(c2), '현재 제목');
+  // (3) 현재 버전에 creed가 없으면 숨김 (그날 기록 버전에 creed가 있어도)
+  const c3 = mk('OLD', { '2026-11-25': day('2026-11-25', { v: 'NEW' }) });
+  eq('(3) 현재 버전에 사명서 없으면 카드 숨김', [look(c3), !!box.querySelector('.creed, .creedline')], [null, false]);
+  eq('(3) creedCard 직접: creed 없는 버전 → 빈 결과', creedCard({ cur: 'x', creedOpen: null }, day('x'), OLD), '');
 });
 
 // 사용자 사명서(docs\seed-2026-beta.json)로 확인: 프로젝트 폴더 전체를 열었을 때만(앱 폴더만 열면 건너뜀)
