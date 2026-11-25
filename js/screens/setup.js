@@ -37,7 +37,7 @@ export function render(ctx) {
 
   // 버전 기록
   const vers = Object.values(S.data.versions).sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
-  h += `<h3>사명서 버전 기록</h3><p class="note">[이 버전 사용]은 오늘 이후 새로 쓰는 기록에 적용됩니다. 지난 기록은 당시 버전으로 계속 채점됩니다.</p><div class="scroll"><table><thead><tr><th>버전</th><th>만든 날</th></tr></thead><tbody>`;
+  h += `<h3>사명서 버전 기록</h3><p class="note">[이 버전 사용]은 오늘 기록과 앞으로 쓰는 기록에 적용됩니다. 지난 기록은 당시 버전으로 계속 채점됩니다.</p><div class="scroll"><table><thead><tr><th>버전</th><th>만든 날</th></tr></thead><tbody>`;
   for (const v of vers) {
     const del = canDeleteVersion(v.id, cid, dayList);
     const n = dayList.filter((d) => d.v === v.id).length;
@@ -96,7 +96,7 @@ export function click(t, ctx) {
     ctx.queue('weeks', wk, 0); ctx.render(); return;
   }
   if (ds.usever) {
-    ctx.repo.setCurrent(ds.usever).then(ctx.reload).then(() => { S.vmsg = ''; ctx.setStatus('사용 버전 변경 · ' + S.data.versions[ds.usever].name); ctx.render(); })
+    return ctx.repo.setCurrent(ds.usever).then(ctx.reload).then(() => ctx.retagToday()).then((msg) => { S.vmsg = msg ? esc(msg) : ''; ctx.setStatus('사용 버전 변경 · ' + S.data.versions[ds.usever].name); ctx.render(); })
       .catch((e) => ctx.setStatus('버전 변경 저장 실패 · ' + (e.message || e), true));
     return;
   }

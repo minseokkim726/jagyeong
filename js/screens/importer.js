@@ -64,10 +64,12 @@ async function apply(ctx) {
   if (!ctx.curId() || I.where === 'welcome') setCur = r.current && after.has(r.current) ? r.current : [...after][0] || null;
   try { await ctx.repo.applyImport(I.plan, setCur); } catch (e) { return fail(ctx, '합치지 못했습니다: ' + (e.message || e)); }
   await ctx.reload();
+  const msg = setCur ? await ctx.retagToday() : '';
   const p = I.plan.preview;
   S.imp = null;
   if (I.where === 'welcome') S.tab = 'today';
-  ctx.setStatus(`가져왔습니다 · 기록 ${p.newDays + p.replaced}일 반영, 버전 ${p.newVersions}개 추가`);
+  if (msg) S.dmsg = esc(msg);
+  ctx.setStatus(`가져왔습니다 · 기록 ${p.newDays + p.replaced}일 반영, 버전 ${p.newVersions}개 추가${msg ? ' · ' + msg : ''}`);
   ctx.render();
 }
 
@@ -78,8 +80,12 @@ export function click(t, ctx) {
   if (a === 'close') close(ctx);
   else if (a === 'paste') { I.paste = !I.paste; I.msg = ''; ctx.render(); if (I.paste) document.getElementById('impText')?.focus(); }
   else if (a === 'read') { const v = document.getElementById('impText')?.value || ''; if (!v.trim()) fail(ctx, '붙여넣은 내용이 없습니다.'); else handleText(ctx, v); }
-  else if (a === 'apply') apply(ctx);
-  else if (a === 'useyes') { ctx.repo.setCurrent(I.ask.id).then(ctx.reload).then(() => { ctx.S.imp = null; ctx.setStatus('현재 버전을 바꿨습니다'); ctx.render(); }); }
+  else if (a === 'apply') return apply(ctx);
+  else if (a === 'useyes') {
+    return ctx.repo.setCurrent(I.ask.id).then(ctx.reload).then(() => ctx.retagToday()).then((msg) => {
+      ctx.S.imp = null; ctx.S.vmsg = msg ? esc(msg) : ''; ctx.setStatus(msg || '현재 버전을 바꿨습니다'); ctx.render();
+    });
+  }
   else if (a === 'useno') close(ctx);
   return true;
 }

@@ -1,6 +1,6 @@
 // 사명서 버전 정의: 형식 맞추기, 저장 전 검사, 가져오기 읽기·합치기 (순수 함수)
 import { clone, fmt2 } from './format.js';
-import { DEFAULT_PEN } from './scoring.js';
+import { DEFAULT_PEN, applyAuto } from './scoring.js';
 
 export const APP_ID = 'jagyeongmun';
 export const SCHEMA = 1;
@@ -232,4 +232,13 @@ export function planMerge(existing, inc) {
     put, missing,
     preview: { days: Object.keys(inc.days || {}).length, versions: Object.keys(inc.versions || {}).length, overlap, newDays, replaced, newVersions: put.versions.length },
   };
+}
+
+// v1.7: 현재 버전이 바뀌면 오늘 기록의 버전도 새 것으로(입력값 m·b·bs·bt·p 등은 그대로 둔다).
+// 바꿀 필요가 없으면 null. 같은 id 항목은 그대로 이어지고, 새 버전에 없는 id는 남지만 채점에 안 쓰인다.
+export const RETAG_MSG = '오늘 기록도 새 기준으로 바꿨습니다. 같은 항목의 표시는 그대로입니다.';
+export function retagDay(d, V) {
+  if (!d || !V || d.v === V.id) return null;
+  const nd = clone(d); nd.v = V.id; applyAuto(nd, V);
+  return nd;
 }

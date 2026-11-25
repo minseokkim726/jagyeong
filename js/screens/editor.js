@@ -1,6 +1,6 @@
 // 설정 모드: 현재 버전의 사본(초안)을 고쳐 새 버전으로 저장한다
 import { validateVersion, editorSums, finalizeVersion, uniqueId } from '../versions.js';
-import { scoreSnapshot } from '../scoring.js';
+import { scoreSnapshot, applyAuto } from '../scoring.js';
 import { esc, fmt1, fmt2, clone, versionIdAt } from '../format.js';
 
 const newId = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -89,7 +89,7 @@ export function render(ctx) {
         h += `<div class="edrow">${inp(`virtues.${vi}.items.${ii}.t`, it.t, { label: it.kind === 'time' ? '유효시간 항목 문구' : '세부 실천 항목' })}
         ${inp(`virtues.${vi}.items.${ii}.h`, it.h, { label: '설명 (선택)' })}
         ${inp(`virtues.${vi}.items.${ii}.w`, it.w, { label: '가중치', num: true, step: '0.05', cls: 'f wcell' })}</div>
-        <div class="edctl">${it.kind === 'time' ? '<span class="tag">유효시간 · 삭제 불가</span>' : `<label class="ckin"><input type="checkbox" data-edck="virtues.${vi}.items.${ii}.streak"${it.streak ? ' checked' : ''}> 연속 기록</label>`}${ctl(`virtues.${vi}.items.${ii}`, ii, v.items.length, { del: it.kind !== 'time', delLabel: '항목 삭제' })}
+        <div class="edctl">${it.kind === 'time' ? '<span class="tag">유효시간 · 삭제 불가</span>' : ''}${ctl(`virtues.${vi}.items.${ii}`, ii, v.items.length, { del: it.kind !== 'time', delLabel: '항목 삭제' })}
         ${vn > 1 ? `<select class="in" data-moveitem="${vi}.${ii}" aria-label="다른 덕목으로 옮기기"><option value="">옮기기…</option>${V.virtues.map((o, oi) => (oi === vi ? '' : `<option value="${oi}">→ ${esc(o.name || oi + 1 + '번째 덕목')}</option>`)).join('')}</select>` : ''}</div>`;
       });
       h += `<div class="chips"><span class="note${Math.abs(ws - 1) > 0.001 ? ' err' : ''}" id="ws${vi}">가중치 합 ${fmt2(ws)}${Math.abs(ws - 1) > 0.001 ? ' · 1이 아님' : ''}</span>
@@ -103,6 +103,8 @@ export function render(ctx) {
   h += `<section class="v ed">${fold('blocks', op.has('blocks'), `<b>유효시간 블록</b> <span class="note" id="blkInfo">${V.blocks.length}개 · 합계 ${fmt1(bT)}T</span>`)}`;
   if (op.has('blocks')) {
     h += '<p class="note">이름은 블록 옆에, 예시 활동은 "한 일" 칸의 안내 글로 보입니다.</p>';
+    const st = +V.tapStep === 0.5 ? 0.5 : 1;
+    h += `<div class="f">카테고리 칩을 한 번 누를 때 더하는 양<div class="chips" role="group" aria-label="누름 단위"><button type="button" class="chip" data-tapstep="1" aria-pressed="${st === 1}">1T (30분)</button><button type="button" class="chip" data-tapstep="0.5" aria-pressed="${st === 0.5}">0.5T (15분)</button></div></div>`;
     V.blocks.forEach((b, bi) => {
       h += `<div class="edrow blkrow">${inp(`blocks.${bi}.h`, b.h, { label: '시간대', ph: '06:00–09:00' })}${inp(`blocks.${bi}.n`, b.n, { label: '이름' })}${inp(`blocks.${bi}.ex`, b.ex, { label: '예시 활동' })}${inp(`blocks.${bi}.t`, b.t, { label: 'T', num: true, step: '0.5', cls: 'f wcell' })}</div>
       <div class="edctl">${ctl(`blocks.${bi}`, bi, V.blocks.length, { delLabel: '블록 삭제' })}</div>`;
@@ -188,7 +190,7 @@ async function save(ctx) {
   delete V.draftOf;
   let retag = null;
   const t = ctx.today();
-  if (S.applyToday !== false && S.data.days[t]) { retag = clone(S.data.days[t]); retag.v = id; retag.score = scoreSnapshot(retag, V); retag.at = now.toISOString(); }
+  if (S.applyToday !== false && S.data.days[t]) { retag = clone(S.data.days[t]); retag.v = id; applyAuto(retag, V, now.toISOString()); retag.score = scoreSnapshot(retag, V); retag.at = now.toISOString(); }
   S.edMsg = '저장 중…'; ctx.render();
   try { await ctx.repo.addVersion(V, { makeCurrent: true, retagDay: retag }); }
   catch (e) { S.edMsg = '저장 실패 · ' + esc(e.message || e); ctx.render(); return; }
@@ -209,6 +211,7 @@ export function click(t, ctx) {
   if (ds.draft === 'resume') { enter(ctx, true); return; }
   if (ds.draft === 'discard') { discard(ctx); return; }
   const V = S.draft; if (!V) return;
+  if (ds.tapstep) { V.tapStep = +ds.tapstep === 0.5 ? 0.5 : 1; changed(ctx); return; }
   if (ds.fold) { const o = openSet(S); if (o.has(ds.fold)) o.delete(ds.fold); else o.add(ds.fold); ctx.render(); markErrors(S); return; }
   if (ds.act) {
     const ks = ds.path.split('.'); const i = +ks.pop(); const arr = getPath(V, ks.join('.'));

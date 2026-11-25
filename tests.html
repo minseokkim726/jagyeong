@@ -30,13 +30,15 @@
   <tbody id="rows"></tbody>
 </table>
 <script type="module">
-import { scoreDay, tFromDay, tMark, scoreSnapshot } from './js/scoring.js';
+import { scoreDay, tFromDay, tMark, scoreSnapshot, applyAuto, itemMark, comboMax, markOf } from './js/scoring.js';
 import { logicalToday, monday, addDays } from './js/format.js';
-import { streak, monthStats, virtueRates, verOf, backupReminder, isCreedOnly, virtueRatesCompare, categoryTime, lastSameType, itemStreak, passiveNotes } from './js/stats.js';
-import { click as todayClick, input as todayInput } from './js/screens/today.js';
+import { streak, monthStats, virtueRates, verOf, backupReminder, isCreedOnly, virtueRatesCompare, categoryTime, lastSameType, itemStreak, passiveNotes, streakRun } from './js/stats.js';
+import { click as todayClick, input as todayInput, pointerdown as todayDown, pointerup as todayUp, LONG_MS } from './js/screens/today.js';
+import { click as impClick } from './js/screens/importer.js';
+import { click as setupClick } from './js/screens/setup.js';
 import { renderCreed, hasCreed } from './js/creed.js';
 import { render as renderToday, creedCard } from './js/screens/today.js';
-import { normalizeVersion, validateVersion, weightWarnings, finalizeVersion, readImport, planMerge, canDeleteVersion, uniqueId, SAMPLE_VERSION } from './js/versions.js';
+import { normalizeVersion, validateVersion, weightWarnings, finalizeVersion, readImport, planMerge, canDeleteVersion, uniqueId, SAMPLE_VERSION, retagDay, RETAG_MSG } from './js/versions.js';
 
 const rows = document.getElementById('rows');
 let pass = 0, fail = 0, skip = 0;
@@ -59,6 +61,8 @@ function eq(name, actual, expected) {
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const r2 = (x) => Math.round(x * 100) / 100;
 function run(name, fn) { try { fn(); } catch (err) { eq(`${name} (예외)`, String(err && err.stack || err), '예외 없음'); } }
+async function runA(name, fn) { try { await fn(); } catch (err) { eq(`${name} (예외)`, String(err && err.stack || err), '예외 없음'); } }
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 중립 시험용 버전: 2026-beta와 id·배점·가중치·블록 T·구간표·규칙 수가 같고 문구는 중립(사명서 문구 없음)
 const PTS = [10, 10, 12, 6, 4, 16, 16, 16, 6];
@@ -459,16 +463,18 @@ run('v15-cat', () => {
   eq('미분류 이름', ct[3].n, '미분류');
   eq('기록 없으면 모두 0', categoryTime([], N27).map((c) => c.t), [0, 0, 0, 0]);
   // lastSameType
-  const D = { '2026-11-02': { type: 'weekday', bc: { b1: 'A' } }, '2026-11-03': { type: 'weekday', bc: {} }, '2026-11-01': { type: 'weekend', bc: { b1: 'B' } }, '2026-10-30': { type: 'weekday', bc: { b2: 'C' } }, '2026-11-06': { type: 'weekday', bc: { b1: 'C' } } };
-  eq('같은 유형 최근 기록: 그날보다 앞선 날 중 bc 있는 가장 늦은 날', [lastSameType(D, '2026-11-05', 'weekday'), lastSameType(D, '2026-11-05', 'weekend'), lastSameType(D, '2026-11-02', 'weekday'), lastSameType(D, '2026-11-05', 'trip')], ['2026-11-02', '2026-11-01', '2026-10-30', null]);
+  const D = { '2026-11-02': { type: 'weekday', bs: { b1: { A: 2 } } }, '2026-11-03': { type: 'weekday', bs: {}, bc: { b1: 'A' } }, '2026-11-01': { type: 'weekend', bs: { b1: { B: 1 } } }, '2026-10-30': { type: 'weekday', bs: { b2: { C: 3 } } }, '2026-11-06': { type: 'weekday', bs: { b1: { C: 1 } } } };
+  eq('같은 유형 최근 기록(v1.7: bs 기준): 그날보다 앞선 날 중 bs 있는 가장 늦은 날(bc만 있는 날은 제외)', [lastSameType(D, '2026-11-05', 'weekday'), lastSameType(D, '2026-11-05', 'weekend'), lastSameType(D, '2026-11-02', 'weekday'), lastSameType(D, '2026-11-05', 'trip')], ['2026-11-02', '2026-11-01', '2026-10-30', null]);
 });
 run('v15-streak', () => {
+  // v1.7에서 규칙이 바뀌었다(△ 한 번 = 보류). 자세한 시험은 v1.7 묶음.
   const S = (marks) => Object.fromEntries(Object.entries(marks).map(([k, v]) => [k, { m: v === null ? {} : { i4a: v } }]));
-  eq('① ○가 이어지면 늘어남', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'o', '2026-11-03': 'o' }), 'i4a', '2026-11-03'), { current: 3, longest: 3 });
-  eq('② △에서 끊김', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 't', '2026-11-03': 'o' }), 'i4a', '2026-11-03'), { current: 1, longest: 1 });
-  eq('③ ✕에서 끊김(최장은 전체에서)', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'o', '2026-11-03': 'x', '2026-11-04': 'o' }), 'i4a', '2026-11-04'), { current: 1, longest: 2 });
-  eq('④ –(해당 없음)는 건너뜀', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'na', '2026-11-03': 'o' }), 'i4a', '2026-11-03'), { current: 2, longest: 2 });
-  eq('⑤ 기록 없는 날·미입력은 건너뜀', itemStreak({ ...S({ '2026-11-01': 'o', '2026-11-02': null, '2026-11-05': 'o' }) }, 'i4a', '2026-11-06'), { current: 2, longest: 2 });
+  const cl = (r) => [r.current, r.longest];
+  eq('① ○가 이어지면 늘어남', cl(itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'o', '2026-11-03': 'o' }), 'i4a', '2026-11-03')), [3, 3]);
+  eq('② (v1.7) △ 한 번은 보류: 끊기지 않고 세지도 않음', cl(itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 't', '2026-11-03': 'o' }), 'i4a', '2026-11-03')), [2, 2]);
+  eq('③ ✕에서 끊김(최장은 전체에서)', cl(itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'o', '2026-11-03': 'x', '2026-11-04': 'o' }), 'i4a', '2026-11-04')), [1, 2]);
+  eq('④ –(해당 없음)는 건너뜀', cl(itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'na', '2026-11-03': 'o' }), 'i4a', '2026-11-03')), [2, 2]);
+  eq('⑤ 기록 없는 날·미입력은 건너뜀', cl(itemStreak({ ...S({ '2026-11-01': 'o', '2026-11-02': null, '2026-11-05': 'o' }) }, 'i4a', '2026-11-06')), [2, 2]);
   eq('보고 있는 날짜부터 거꾸로(그 뒤 기록은 안 셈)', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'o', '2026-11-03': 'x', '2026-11-04': 'o' }), 'i4a', '2026-11-02').current, 2);
   const mixed = { '2026-11-01': { v: 'T26', m: { i4a: 'o' } }, '2026-11-02': { v: 'N27', m: { i4a: 'o' } } };
   eq('버전이 바뀌어도 항목 id로 이어짐', itemStreak(mixed, 'i4a', '2026-11-02').current, 2);
@@ -501,15 +507,7 @@ run('v15-pm', () => {
   eq('○로 되돌리면 표시·메모 모두 지움', [S.data.days[S.cur].p.p10a, (S.data.days[S.cur].pm || {}).p10a], [undefined, undefined]);
   todayInput({ dataset: { pm: 'p10b' }, value: '  ' }, ctx);
   eq('빈 메모는 저장하지 않음', 'p10b' in (S.data.days[S.cur].pm || {}), false);
-  // 카테고리 칩: 하나만, 다시 누르면 해제 / 지난 같은 유형 채우기(카테고리만)
-  todayClick(btn({ bc: 'b1', cat: 'A' }), ctx); todayClick(btn({ bc: 'b1', cat: 'B' }), ctx);
-  eq('칩: 하나만 고름(B로 바뀜)', S.data.days[S.cur].bc, { b1: 'B' });
-  todayClick(btn({ bc: 'b1', cat: 'B' }), ctx);
-  eq('칩: 다시 누르면 해제', S.data.days[S.cur].bc, {});
-  S.data.days['2026-11-24'] = { date: '2026-11-24', v: 'N27', type: 'weekday', m: { i1a: 'o' }, b: { b1: 'o' }, bt: { b1: '어제 한 일' }, p: {}, bc: { b1: 'A', b2: 'C', old: 'B' } };
-  todayClick(btn({ bcfill: '2026-11-24' }), ctx);
-  const t = S.data.days[S.cur];
-  eq('채우기: 카테고리만 복사(집중도·한 일·없는 블록은 안 옴)', [t.bc, t.b.b1, (t.bt || {}).b1], [{ b1: 'A', b2: 'C' }, undefined, undefined]);
+  // (v1.5의 bc 칩·채우기 시험은 v1.7에서 bs로 바뀌어 v1.7 묶음으로 옮김)
   // A1 저장·지우기
   todayInput({ dataset: { a1: '1' }, value: '보고서 끝내기' }, ctx);
   eq('A1 저장', S.data.days[S.cur].a1, '보고서 끝내기');
@@ -523,7 +521,7 @@ run('v15-render', () => {
     getDay: (k) => S.data.days[k] || { date: k, v: V.id, type: 'weekday', m: {}, b: {}, bt: {}, p: {}, tAdj: 0, tOverride: null, memo: '', line: '' },
     verOfDay: (d) => ({ V: S.data.versions[d.v] || V, missing: false }) });
   S.data.days = {
-    '2026-11-22': { date: '2026-11-22', v: 'N27', type: 'weekday', m: { i4a: 'o' }, b: {}, p: {}, bc: { b1: 'A' } },
+    '2026-11-22': { date: '2026-11-22', v: 'N27', type: 'weekday', m: { i4a: 'o' }, b: {}, p: {}, bs: { b1: { A: 2 } } },
     '2026-11-23': { date: '2026-11-23', v: 'N27', type: 'weekday', m: { i4a: 'na' }, b: {}, p: {} },
     '2026-11-24': { date: '2026-11-24', v: 'N27', type: 'weekday', m: { i4a: 'o' }, b: {}, p: {} },
     '2026-11-25': { date: '2026-11-25', v: 'N27', type: 'weekday', m: {}, b: { b1: 'o' }, bt: {}, p: { p11a: 't' }, a1: '오늘 일' },
@@ -534,22 +532,236 @@ run('v15-render', () => {
   eq('묶음 제목: 바뀌는 자리에만(갑, 을)', qa('.grp').map((e) => e.textContent), ['묶음갑', '묶음을']);
   eq('덕목 원칙 한 줄(문장 사이 공백)', q('.vcreed').textContent, '원칙 하나. 원칙 둘.');
   eq('A1 입력 칸 + A1 항목 줄에 "오늘의 A1: …"', [!!q('[data-a1]'), q('[data-a1]').value, q('#a1Line').textContent], [true, '오늘 일', '오늘의 A1: 오늘 일']);
-  eq('연속 기록 줄(– 건너뜀)', q('.stk').textContent, '연속 2일 · 최장 2일');
+  eq('연속 기록(v1.7: 항목 이름 옆, – 건너뜀)', q('[data-mark="i4a"]').closest('.item').querySelector('.stk').textContent, '연속 2 · 최장 2');
   eq('블록마다 카테고리 칩 3개, 블록 7개', [qa('.blk.wc').length, qa('.blk.wc')[0].querySelectorAll('.cat').length, qa('.blk.wc')[0].querySelector('.cat b').textContent], [7, 3, 'A']);
   eq('카테고리 칩이 "한 일" 칸 위', qa('.blk.wc')[0].querySelector('.cats').compareDocumentPosition(qa('.blk.wc')[0].querySelector('input')) === Node.DOCUMENT_POSITION_FOLLOWING, true);
-  eq('[지난 평일과 같게 채우기] 버튼(bc 비었고 지난 평일에 있음)', q('[data-bcfill]') && [q('[data-bcfill]').dataset.bcfill, q('[data-bcfill]').textContent], ['2026-11-22', '지난 평일과 같게 채우기']);
+  eq('[지난 평일과 같게 채우기] 버튼 없음(그날 b가 있음)', !!q('[data-bsfill]'), false);
   eq('Passive △ 줄 아래 메모 칸, ○ 줄엔 없음', [!!q('[data-pm="p11a"]'), !!q('[data-pm="p10a"]')], [true, false]);
   eq('Passive 묶음 모델 표시', box.querySelectorAll('details.pass .vh .meta')[0].textContent.includes('본보기'), true);
-  S.data.days['2026-11-25'].bc = { b2: 'B' };
+  S.data.days['2026-11-25'].b = {};
   box.innerHTML = renderToday(mk(N27));
-  eq('그날 bc가 있으면 채우기 버튼 없음 + 고른 칩 표시', [!!q('[data-bcfill]'), q('[data-bc="b2"][data-cat="B"]').getAttribute('aria-pressed')], [false, 'true']);
+  eq('(v1.7) b·bs가 비면 [지난 평일과 같게 채우기](bs 있는 지난 평일)', q('[data-bsfill]') && [q('[data-bsfill]').dataset.bsfill, q('[data-bsfill]').textContent], ['2026-11-22', '지난 평일과 같게 채우기']);
   S.data.days['2026-11-25'].a1 = '';
   box.innerHTML = renderToday(mk(N27));
   eq('A1 비었으면 안내 문구', q('#a1Line').textContent.startsWith('아침에 A1을 적지 않았습니다'), true);
   // 옛 버전(새 필드 없음): 모두 숨김, 화면 그대로
   S.data.days = { '2026-11-25': { date: '2026-11-25', v: 'T26', type: 'weekday', m: {}, b: {}, bt: {}, p: { p10a: 't' } } };
   box.innerHTML = renderToday(mk(T26));
-  eq('옛 버전: 칩·A1·묶음·원칙·연속 기록 없음, 블록 옛 모양', [qa('.cat').length, !!q('[data-a1]'), qa('.grp').length, qa('.vcreed').length, qa('.stk').length, qa('.blk').length, qa('.blk.wc').length], [0, false, 0, 0, 0, 7, 0]);
+  eq('옛 버전: 칩·A1·묶음·원칙 없음, 블록 옛 모양, 연속 기록은 모든 항목(22)에', [qa('.cat').length, !!q('[data-a1]'), qa('.grp').length, qa('.vcreed').length, qa('.stk').length, qa('.blk').length, qa('.blk.wc').length], [0, false, 0, 0, 22, 7, 0]);
+});
+
+// ---------- v1.7: 버전 전환 보정 · 전 항목 연속 기록 · 블록 카테고리별 T · 6콤보 자동 (중립 견본) ----------
+group('v1.7 A. 버전을 바꾸면 오늘 기록도 새 기준으로');
+// 가짜 화면 도구: 실제 화면 처리기(가져오기·버전 기록·오늘 화면)를 그대로 부른다
+function fakeCtx(today, cur, days) {
+  const S = { cur: today, creedOpen: null, tab: 'setup', mode: 'run', imp: null, vmsg: '', dmsg: '',
+    data: { versions: { T26, N27 }, days, weeks: {}, months: {}, settings: { cur } } };
+  const ctx = { S, today: () => today, curId: () => S.data.settings.cur, curV: () => S.data.versions[S.data.settings.cur],
+    getDay: (k) => S.data.days[k] || { date: k, v: S.data.settings.cur, type: 'weekday', m: {}, b: {}, bt: {}, p: {}, tAdj: 0, tOverride: null, memo: '', line: '' },
+    verOfDay: (d) => ({ V: S.data.versions[d.v] || S.data.versions[S.data.settings.cur], missing: false }),
+    editDay(fn) { const d = clone(this.getDay(S.cur)); fn(d); S.data.days[S.cur] = d; },
+    render() {}, flushAll() {}, go() {}, setStatus(t) { S.status = t; }, queue() {},
+    reload: async () => {},
+    async retagToday() { const nd = retagDay(S.data.days[today], ctx.curV()); if (!nd) return ''; S.data.days[today] = nd; return RETAG_MSG; },
+    repo: { setCurrent: async (id) => { S.data.settings.cur = id; }, applyImport: async (plan, setCur) => { for (const d of plan.put.days) S.data.days[d.date] = d; for (const v of plan.put.versions) S.data.versions[v.id] = v; if (setCur) S.data.settings.cur = setCur; } } };
+  return ctx;
+}
+const box17 = document.createElement('div');
+const view = (ctx) => { box17.innerHTML = renderToday(ctx); return box17; };
+const TD = '2026-11-25', PAST = '2026-11-20';
+await runA('v17-A1', async () => {
+  const ctx = fakeCtx(TD, 'T26', { [TD]: { date: TD, v: 'T26', type: 'weekday', m: { i1a: 'o', i4a: 't', zz: 'o' }, b: { b1: 'o' }, bt: {}, p: { p10a: 't' }, tAdj: 0, tOverride: null } });
+  eq('(1) 전: 오늘 화면이 옛 버전(카테고리 칩 없음)', view(ctx).querySelectorAll('.blk.wc').length, 0);
+  ctx.S.imp = { where: 'version', ask: { id: 'N27', text: '' } };
+  await impClick({ dataset: { imp: 'useyes' } }, ctx);
+  const d = ctx.S.data.days[TD];
+  eq('(1) 버전 가져오기 [예, 지금부터 사용] → 오늘 기록 v = 새 버전', [ctx.S.data.settings.cur, d.v], ['N27', 'N27']);
+  eq('(1) 입력값(m·b·p, 새 버전에 없는 id 포함) 그대로', [d.m, d.b, d.p], [{ i1a: 'o', i4a: 't', zz: 'o' }, { b1: 'o' }, { p10a: 't' }]);
+  eq('(1) 알림 한 줄', [ctx.S.vmsg, ctx.S.status], [RETAG_MSG, RETAG_MSG]);
+  const bx = view(ctx);
+  eq('(1) 오늘 화면 항목이 새 버전(칩 7블록) + 같은 id 표시 유지 + 안내 띠 없음', [bx.querySelectorAll('.blk.wc').length, bx.querySelector('[data-mark="i1a"][data-val="o"]').getAttribute('aria-pressed'), bx.querySelector('[data-mark="i4a"][data-val="t"]').getAttribute('aria-pressed'), !!bx.querySelector('.banner.retag')], [7, 'true', 'true', false]);
+  eq('(1) 새 버전에 없는 id는 채점에 안 쓰임(점수 = 그 id 뺀 것과 같음)', r2(scoreDay(d, N27).pct), r2(scoreDay({ ...d, m: { i1a: 'o', i4a: 't' } }, N27).pct));
+});
+await runA('v17-A2', async () => {
+  const ctx = fakeCtx(TD, 'T26', { [TD]: { date: TD, v: 'T26', type: 'weekday', m: { i2a: 'x' }, b: {}, bt: {}, p: {}, tAdj: 0, tOverride: null }, [PAST]: { date: PAST, v: 'T26', type: 'weekday', m: { i1a: 'o' }, b: {}, bt: {}, p: {} } });
+  await setupClick({ dataset: { usever: 'N27' } }, ctx);
+  eq('(2) [이 버전 사용]도 같음: 오늘 v 바뀜, 표시 유지, 알림', [ctx.S.data.days[TD].v, ctx.S.data.days[TD].m, ctx.S.vmsg], ['N27', { i2a: 'x' }, RETAG_MSG]);
+  eq('(3) 지난 날은 자동으로 안 바뀜', ctx.S.data.days[PAST].v, 'T26');
+  ctx.S.cur = PAST;
+  let bx = view(ctx);
+  eq('(3) 지난 날: 옛 기준 안내 띠 + [지금 기준으로 바꾸기]', [!!bx.querySelector('.banner.retag'), bx.querySelector('.banner.retag').textContent.includes('예전 기준(시험 버전)'), !!bx.querySelector('[data-retag="ask"]'), bx.querySelectorAll('.blk.wc').length], [true, true, true, 0]);
+  todayClick({ dataset: { retag: 'ask' } }, ctx);
+  bx = view(ctx);
+  eq('(3) 누르면 확인 한 번(아직 안 바뀜)', [bx.querySelector('.banner.retag').textContent.includes('다시 계산됩니다'), ctx.S.data.days[PAST].v], [true, 'T26']);
+  todayClick({ dataset: { retag: 'yes' } }, ctx);
+  bx = view(ctx);
+  eq('(3) [바꾸기] 후 그날만 새 버전, 띠 사라짐, 표시 유지', [ctx.S.data.days[PAST].v, ctx.S.data.days[PAST].m, !!bx.querySelector('.banner.retag'), bx.querySelectorAll('.blk.wc').length], ['N27', { i1a: 'o' }, false, 7]);
+  ctx.S.cur = TD;
+  eq('(4) 현재 버전과 같은 날은 띠 없음', !!view(ctx).querySelector('.banner.retag'), false);
+  ctx.S.cur = '2026-11-21';
+  eq('(4) 기록 없는 날도 띠 없음(현재 버전으로 시작)', [!!view(ctx).querySelector('.banner.retag'), ctx.getDay('2026-11-21').v], [false, 'N27']);
+});
+await runA('v17-A3', async () => {
+  // 백업 복원으로 현재 버전이 바뀌는 경우(첫 화면 가져오기)
+  const ctx = fakeCtx(TD, 'T26', { [TD]: { date: TD, v: 'T26', type: 'weekday', m: { i1a: 'o' }, b: {}, bt: {}, p: {}, at: '2026-11-25T01:00:00Z' } });
+  const r = readImport(JSON.stringify({ app: 'jagyeongmun', schema: 1, current: 'N27', versions: { N27: clone(N27) }, days: {}, weeks: {}, months: {} }));
+  const plan = planMerge({ versions: { T26 }, days: ctx.S.data.days, weeks: {}, months: {} }, r);
+  ctx.S.imp = { where: 'welcome', read: r, plan };
+  await impClick({ dataset: { imp: 'apply' } }, ctx);
+  eq('백업 복원으로 현재 버전이 바뀌면 오늘 기록도 새 버전 + 알림', [ctx.S.data.settings.cur, ctx.S.data.days[TD].v, ctx.S.data.days[TD].m, ctx.S.status.includes(RETAG_MSG)], ['N27', 'N27', { i1a: 'o' }, true]);
+  eq('retagDay: 같은 버전이면 null(안 바꿈) / 기록 없으면 null', [retagDay({ v: 'N27' }, N27), retagDay(undefined, N27)], [null, null]);
+});
+
+group('v1.7 B. 연속 기록 (모든 항목 · △ 한 번 보류)');
+run('v17-B', () => {
+  const sr = (str) => streakRun([...str].map((c) => ({ '○': 'o', '△': 't', '✕': 'x', '–': null }[c]))).run;
+  eq('○○△○ → 3', sr('○○△○'), 3);
+  eq('○○△△ → 0', sr('○○△△'), 0);
+  eq('○△–△ → 0 (–는 없는 날)', sr('○△–△'), 0);
+  eq('○△✕ → 0', sr('○△✕'), 0);
+  eq('△○○ → 2', sr('△○○'), 2);
+  eq('○○△(오늘) → 2, 보류 중', (({ run, pending }) => [run, pending])(streakRun(['o', 'o', 't'])), [2, true]);
+  const D = (arr) => Object.fromEntries(arr.map((m, i) => [`2026-11-${String(i + 1).padStart(2, '0')}`, m === undefined ? null : { v: 'T26', m: m ? { i4a: m } : {} }]).filter(([, v]) => v));
+  eq('itemStreak: 미입력·기록 없는 날은 건너뜀(△ 연속 판정에서도) ○△(미입력)(기록없음)△ → 0', itemStreak(D(['o', 't', null, undefined, 't']), 'i4a', '2026-11-05').current, 0);
+  const r6 = itemStreak(D(['o', 'o', 't', 'o', 'x', 'o']), 'i4a', '2026-11-04');
+  eq('itemStreak: ○○△○ → 3, 최장은 전체 기록', [r6.current, r6.longest], [3, 3]);
+  // 유효시간 항목: T ≥ 20 → ○, 미만 → ✕, 미입력·– 건너뜀
+  const it = T26.virtues[5].items[0];
+  eq('유효시간 19.5T → ✕ / 20T → ○', [itemMark(day({ tOverride: 19.5 }), it, T26), itemMark(day({ tOverride: 20 }), it, T26)], ['x', 'o']);
+  eq('유효시간 미입력 → 건너뜀 / – → 건너뜀', [itemMark(day({}), it, T26), itemMark(day({ tOverride: 25, m: { i6a: 'na' } }), it, T26)], [null, null]);
+  eq('기준은 버전의 streakT(15)', itemMark(day({ tOverride: 15 }), it, { ...T26, streakT: 15 }), 'o');
+  eq('유효시간 블록 합으로 판정(6+5+3+0+2+2.5 = 18.5 → ✕)', itemMark(day({ b: { b1: 'o', b2: 'o', b3: 'o', b4: 'x', b5: 't', b6: 't' } }), it, T26), 'x');
+  // 화면: 모든 채점 항목 이름 옆, 보류 표시
+  const S = { cur: '2026-11-25', creedOpen: null, data: { versions: { N27 }, days: {
+    '2026-11-23': { date: '2026-11-23', v: 'N27', type: 'weekday', m: { i1a: 'o', i3a: 'o' }, b: {}, p: {}, tOverride: 21 },
+    '2026-11-24': { date: '2026-11-24', v: 'N27', type: 'weekday', m: { i1a: 'o', i3a: 'x' }, b: {}, p: {}, tOverride: 19.5 },
+    '2026-11-25': { date: '2026-11-25', v: 'N27', type: 'weekday', m: { i1a: 't' }, b: {}, bt: {}, p: {} } }, weeks: {}, months: {}, settings: { cur: 'N27' } } };
+  const ctx = { S, curId: () => 'N27', curV: () => N27, today: () => S.cur, getDay: (k) => S.data.days[k], verOfDay: () => ({ V: N27, missing: false }) };
+  const bx = view(ctx);
+  const stkOf = (id) => bx.querySelector(`[data-mark="${id}"]`).closest('.item').querySelector('.stk').textContent;
+  eq('화면: ○○△(오늘) → "연속 2 (보류) · 최장 2"', stkOf('i1a'), '연속 2 (보류) · 최장 2');
+  eq('화면: ○✕ → "연속 0 · 최장 1"', stkOf('i3a'), '연속 0 · 최장 1');
+  eq('화면: 유효시간 21T(○) → 19.5T(✕) → 오늘 미입력(건너뜀) = 0, 최장 1', stkOf('i6a'), '연속 0 · 최장 1');
+  eq('화면: 채점 항목 수만큼 연속 기록 표시(streak 표시 없어도)', bx.querySelectorAll('.stk').length, N27.virtues.reduce((a, v) => a + v.items.length, 0));
+});
+
+group('v1.7 C. 블록 카테고리별 T (bs)');
+const B = (o) => day({ v: 'N27', ...o });
+run('v17-C-calc', () => {
+  eq('bs가 있으면 그 합계, 없으면 b × T (b1 bs 2+2, b2 온전히 5) = 9', tFromDay(B({ bs: { b1: { E: 2, A: 2 } }, b: { b2: 'o' } }), N27), 9);
+  eq('bs가 있는 블록은 b를 무시', tFromDay(B({ bs: { b1: { A: 1 } }, b: { b1: 'o' } }), N27), 1);
+  eq('보정(±T)은 그 위에', tFromDay(B({ bs: { b1: { A: 3 } }, tAdj: -1 }), N27), 2);
+  eq('직접 입력 T가 우선', tFromDay(B({ bs: { b1: { A: 3 } }, tOverride: 10 }), N27), 10);
+  eq('빈 bs 블록은 입력 없음 = 미입력', tFromDay(B({ bs: { b1: {} } }), N27), null);
+  eq('옛 기록(bs 없음) 11-23 = 91.83 그대로', snap(scoreDay({ ...REF, v: 'T26' }, T26)), { raw: 88.16, max: 96, T: 23, pen: 0, pct: 91.83 });
+  eq('옛 기록에 빈 bs·auto가 있어도 같음', r2(scoreDay({ ...REF, v: 'T26', bs: {}, auto: {} }, T26).pct), 91.83);
+});
+run('v17-C-ui', () => {
+  const ctx = fakeCtx(TD, 'N27', {});
+  const tap = (b, c) => todayClick({ dataset: { bs: b, cat: c } }, ctx);
+  const d = () => ctx.S.data.days[TD];
+  todayClick({ dataset: { mark: 'blk:b1', val: 'o' } }, ctx);
+  tap('b1', 'B'); tap('b1', 'B'); tap('b1', 'A'); tap('b1', 'A');
+  eq('칩 한 번 = +1T, 블록 b는 지움', [d().bs, 'b1' in d().b], [{ b1: { B: 2, A: 2 } }, false]);
+  eq('오늘 T = 4', tFromDay(d(), N27), 4);
+  const bx = view(ctx);
+  const blk = bx.querySelectorAll('.blk.wc')[0];
+  eq('블록 머리 "합계 4 / 6T", 칩 숫자 "B 2", [보통][미흡] 숨김, [남은 T 채우기][지우기]', [blk.querySelector('.bsum').textContent, blk.querySelector('[data-cat="B"] b').textContent, blk.querySelectorAll('.lv-t, .lv-x').length, !!blk.querySelector('[data-bsrest="b1"]'), !!blk.querySelector('[data-bsclr="b1"]')], ['합계 4 / 6T', 'B 2', 0, true, true]);
+  eq('bs 없는 블록은 [온전히][보통][미흡] 그대로', bx.querySelectorAll('.blk.wc')[1].querySelectorAll('.lv-o, .lv-t, .lv-x').length, 3);
+  todayClick({ dataset: { bsrest: 'b1' } }, ctx);
+  eq('[남은 T 채우기]: 마지막으로 누른 카테고리(A)에 남은 2T', d().bs.b1, { B: 2, A: 4 });
+  tap('b1', 'B');
+  eq('상한: 6T 넘는 누름은 무시', d().bs.b1, { B: 2, A: 4 });
+  todayClick({ dataset: { bsclr: 'b1' } }, ctx);
+  eq('[지우기]: 블록 bs 전체 삭제 → 예전 버튼으로', ['bs' in d(), view(ctx).querySelectorAll('.blk.wc')[0].querySelectorAll('.lv-o, .lv-t, .lv-x').length], [false, 3]);
+  tap('b2', 'B'); todayClick({ dataset: { bsrest: 'b2' } }, ctx);
+  eq('누름 2번으로 한 블록 다 채우기(B 5T)', d().bs.b2, { B: 5 });
+  ctx.S.data.versions.N27 = { ...N27, tapStep: 0.5 }; tap('b3', 'C');
+  const half = [d().bs.b3, view(ctx).querySelector('[data-bs="b3"][data-cat="C"] b').textContent];
+  ctx.S.data.versions.N27 = N27;
+  eq('누름 단위 0.5T(tapStep), 칩 숫자 0.5 단위', half, [{ C: 0.5 }, 'C 0.5']);
+});
+await runA('v17-C-long', async () => {
+  const ctx = fakeCtx(TD, 'N27', { [TD]: { date: TD, v: 'N27', type: 'weekday', m: {}, b: {}, bt: {}, p: {}, bs: { b1: { E: 2, A: 1 } } } });
+  const el = document.createElement('button'); el.dataset.bs = 'b1'; el.dataset.cat = 'E';
+  todayDown({ target: el, clientX: 5, clientY: 5, button: 0 }, ctx);
+  await wait(LONG_MS + 150);
+  eq('길게 누르면(0.5초) 그 칩 0T', ctx.S.data.days[TD].bs.b1, { A: 1 });
+  todayUp({}, ctx);
+  todayClick({ dataset: { bs: 'b1', cat: 'E' } }, ctx);
+  eq('길게 누른 뒤 손을 떼도 +1 안 됨', ctx.S.data.days[TD].bs.b1, { A: 1 });
+  todayDown({ target: el, clientX: 5, clientY: 5, button: 0 }, ctx);
+  await wait(100); todayUp({}, ctx);
+  todayClick({ dataset: { bs: 'b1', cat: 'E' } }, ctx);
+  eq('짧게 누르면 +1', ctx.S.data.days[TD].bs.b1, { A: 1, E: 1 });
+  el.dataset.cat = 'A'; todayDown({ target: el, clientX: 5, clientY: 5, button: 0 }, ctx); await wait(LONG_MS + 150); todayUp({}, ctx);
+  el.dataset.cat = 'E'; todayDown({ target: el, clientX: 5, clientY: 5, button: 0 }, ctx); await wait(LONG_MS + 150); todayUp({}, ctx);
+  eq('블록의 모든 칩을 0으로 하면 bs가 사라짐', 'bs' in ctx.S.data.days[TD], false);
+});
+run('v17-C-fill', () => {
+  const days = {
+    '2026-11-24': { date: '2026-11-24', v: 'N27', type: 'weekday', m: { i1a: 'o' }, b: { b3: 'o' }, bt: { b1: '한 일' }, p: {}, bs: { b1: { A: 4, E: 2 }, b2: { B: 5 }, old: { C: 1 } } },
+    '2026-11-23': { date: '2026-11-23', v: 'N27', type: 'weekend', m: {}, b: {}, p: {}, bs: { b1: { C: 6 } } },
+  };
+  const ctx = fakeCtx(TD, 'N27', days);
+  const bx = view(ctx);
+  eq('b·bs가 비었을 때 [지난 평일과 같게 채우기](가장 최근 평일)', [bx.querySelector('[data-bsfill]').dataset.bsfill, bx.querySelector('[data-bsfill]').nextElementSibling.textContent], ['2026-11-24', '카테고리와 T 복사 (11/24)']);
+  todayClick({ dataset: { bsfill: '2026-11-24' } }, ctx);
+  const d = ctx.S.data.days[TD];
+  eq('복사: 카테고리와 T(버전에 있는 블록만), 집중도·한 일은 안 옴', [d.bs, d.b.b3, (d.bt || {}).b1], [{ b1: { A: 4, E: 2 }, b2: { B: 5 } }, undefined, undefined]);
+  eq('복사 뒤 버튼 없음', !!view(ctx).querySelector('[data-bsfill]'), false);
+  const c2 = fakeCtx(TD, 'T26', {}); const b2 = view(c2);
+  eq('카테고리 없는 버전은 예전 화면(칩·합계 없음)', [b2.querySelectorAll('.cat').length, b2.querySelectorAll('.bsum').length, b2.querySelectorAll('.blk').length], [0, 0, 7]);
+  // 추이: 카테고리별 유효시간
+  const ct = categoryTime([{ d: { bs: { b1: { A: 4, E: 2, Z: 1 } }, b: { b1: 'o', b2: 'o' }, bc: { b2: 'B' } }, V: { ...N27, categories: [...N27.categories, { id: 'E', n: '운동' }] } }], N27);
+  eq('카테고리별 유효시간: bs는 그대로(모르는 Z는 미분류), 없는 블록은 예전 계산(b2 → B 5)', ct.map((c) => [c.id, c.t]), [['A', 4], ['B', 5], ['C', 0], ['E', 2], [null, 1]]);
+});
+
+group('v1.7 D. 6콤보 자동');
+run('v17-D', () => {
+  const auto = (bs) => { const d = B({ bs }); applyAuto(d, N27, 'T'); return d.auto ? d.auto.i9a : null; };
+  eq('n=6 → ○ (자동)', auto({ b1: { A: 6 } }), { val: 'o', src: 'blocks', at: 'T' });
+  eq('n=5 → △', auto({ b1: { A: 5, B: 1 } }).val, 't');
+  eq('n=3 → △', auto({ b1: { A: 3 }, b2: { A: 3 } }).val, 't');
+  eq('n=2 → 자동 값 없음(한 블록 안 한 카테고리 기준)', auto({ b1: { A: 2, B: 2 }, b2: { A: 2 } }), null);
+  eq('comboMax: 한 블록 안 한 카테고리의 가장 큰 T', comboMax({ bs: { b1: { A: 2, B: 4 }, b2: { A: 5 } } }), 5);
+  const dc = B({ bs: { b1: { A: 4 } } }); applyAuto(dc, { ...N27, combo: { full: 4, half: 2 } });
+  eq('기준은 버전의 combo', dc.auto.i9a.val, 'o');
+  const base = B({ m: allO(), b: allBlocks() }); delete base.m.i9a;
+  const sNone = scoreDay(base, N27);
+  const wAuto = { ...base, auto: { i9a: { val: 'o', src: 'blocks', at: 'T' } } };
+  eq('자동 값은 m이 없을 때 채점에 쓰고 "입력 n/m"에도 셈', [r2(scoreDay(wAuto, N27).pct), scoreDay(wAuto, N27).filled - sNone.filled], [100, 1]);
+  eq('직접 누른 값이 항상 우선', [r2(scoreDay({ ...wAuto, m: { ...wAuto.m, i9a: 'x' } }, N27).pct), markOf({ m: { i9a: 'x' }, auto: { i9a: { val: 'o' } } }, 'i9a')], [r2(scoreDay({ ...base, m: { ...base.m, i9a: 'x' } }, N27).pct), 'x']);
+  eq('직접 값이 –면 자동 값이 있어도 제외', r2(scoreDay({ ...wAuto, m: { ...wAuto.m, i9a: 'na' } }, N27).max), r2(scoreDay({ ...base, m: { ...base.m, i9a: 'na' } }, N27).max));
+  // 화면 처리기로: bs 바뀌면 다시 계산, 직접 값은 덮어쓰지 않음
+  const ctx = fakeCtx(TD, 'N27', {});
+  const tap = (b, c, n = 1) => { for (let i = 0; i < n; i++) todayClick({ dataset: { bs: b, cat: c } }, ctx); };
+  const d = () => ctx.S.data.days[TD];
+  tap('b1', 'A', 3);
+  eq('칩 3번(A 3T) → 자동 △', d().auto.i9a.val, 't');
+  tap('b1', 'A', 3);
+  eq('칩 6번(A 6T) → 자동 ○', d().auto.i9a.val, 'o');
+  let bx = view(ctx);
+  eq('화면: "오늘 최장 6콤보" + ○ 버튼에 자동 표시', [bx.querySelector('[data-mark="i9a"]').closest('.item').querySelector('.combo').textContent.startsWith('오늘 최장 6콤보'), bx.querySelector('[data-mark="i9a"][data-val="o"]').getAttribute('aria-pressed'), bx.querySelector('[data-mark="i9a"][data-val="o"]').classList.contains('auto')], [true, 'true', true]);
+  todayClick({ dataset: { bsclr: 'b1' } }, ctx);
+  eq('bs를 지우면 자동 값도 사라짐', 'auto' in d(), false);
+  todayClick({ dataset: { mark: 'i9a', val: 'x' } }, ctx); tap('b2', 'B', 5); tap('b1', 'C', 6);
+  bx = view(ctx);
+  eq('직접 ✕를 누른 뒤 6콤보가 돼도 m은 ✕ 그대로, 화면도 ✕(자동 표시 없음)', [d().m.i9a, d().auto.i9a.val, bx.querySelector('[data-mark="i9a"][data-val="x"]').getAttribute('aria-pressed'), bx.querySelector('[data-mark="i9a"][data-val="o"]').getAttribute('aria-pressed'), bx.querySelectorAll('.mk.auto').length], ['x', 'o', 'true', 'false', 0]);
+  eq('연속 기록도 같은 값(자동 ○)', itemMark({ m: {}, auto: { i9a: { val: 'o' } } }, { id: 'i9a', kind: 'combo' }, N27), 'o');
+});
+run('v17-keep', () => {
+  const dayX = { date: '2026-11-25', v: 'N27', m: {}, b: {}, p: {}, bs: { b1: { E: 2, A: 2 } }, auto: { i9a: { val: 't', src: 'blocks', at: 'x' }, q: { val: 'o', src: 'other', detail: 1 } }, at: '2026-11-25T10:00:00Z' };
+  const bk = readImport(JSON.stringify({ app: 'jagyeongmun', schema: 1, current: 'N27', versions: { N27: { ...clone(N27), tapStep: 0.5, streakT: 18, combo: { full: 5, half: 2 } } }, days: { '2026-11-25': dayX }, weeks: {}, months: {} }));
+  const pb = planMerge({ versions: {}, days: {}, weeks: {}, months: {} }, bk);
+  eq('백업 가져오기: bs·auto 그대로', [pb.put.days[0].bs, pb.put.days[0].auto], [dayX.bs, dayX.auto]);
+  eq('버전 새 필드(tapStep·streakT·combo) 보존', (({ tapStep, streakT, combo }) => [tapStep, streakT, combo])(pb.put.versions[0]), [0.5, 18, { full: 5, half: 2 }]);
+  const art = readImport({ version: 'N27', days: { '2026-11-25': dayX }, weeks: {}, months: {} });
+  const pa = planMerge({ versions: { N27 }, days: {}, weeks: {}, months: {} }, art).put.days[0];
+  eq('아티팩트 가져오기: bs·auto 그대로', [pa.bs, pa.auto], [dayX.bs, dayX.auto]);
+  const dd = clone(dayX); dd.bs = {}; applyAuto(dd, N27);
+  eq('다른 출처의 자동 값은 다시 계산해도 건드리지 않음', dd.auto, { q: { val: 'o', src: 'other', detail: 1 } });
+  eq('bs만 있는 날은 기록한 날', isCreedOnly({ creedAt: 'x', m: {}, b: {}, p: {}, bs: { b1: { A: 1 } } }), false);
 });
 
 // 사용자 사명서(docs\seed-2026-beta.json)로 확인: 프로젝트 폴더 전체를 열었을 때만(앱 폴더만 열면 건너뜀)

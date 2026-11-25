@@ -1,5 +1,5 @@
 // 추이 계산 (순수 함수)
-import { scoreDay } from './scoring.js';
+import { scoreDay, hasBs } from './scoring.js';
 import { addDays, monday, monthDays, parse } from './format.js';
 
 // 기록의 버전 정의(없으면 현재 버전, missing 표시)
@@ -14,7 +14,7 @@ export function verOf(d, versions, cur) {
 const isFilled = (o) => o && typeof o === 'object' && Object.keys(o).length > 0;
 export function isCreedOnly(d) {
   if (!d || !(d.creedAt || String(d.a1 || '').trim())) return false;
-  const has = isFilled(d.m) || isFilled(d.b) || isFilled(d.p) || isFilled(d.bt) || isFilled(d.bc) || isFilled(d.pm) || isFilled(d.menu)
+  const has = isFilled(d.m) || isFilled(d.b) || isFilled(d.p) || isFilled(d.bt) || isFilled(d.bc) || isFilled(d.bs) || isFilled(d.pm) || isFilled(d.menu)
     || (d.tOverride !== null && d.tOverride !== undefined && d.tOverride !== '') || (+d.tAdj || 0) !== 0
     || [d.kcal, d.steps, d.weight, d.drink].some((x) => x !== null && x !== undefined && x !== '')
     || !!String(d.memo || '').trim() || !!String(d.line || '').trim();
@@ -104,7 +104,8 @@ export function virtueRatesCompare(rec, prevRec, curV) {
 const BLK = { o: 1, t: 0.5, x: 0 };
 export const UNCAT = '미분류';
 
-// 카테고리별 유효시간 = Σ(블록 T × 집중도 값). 고르지 않았거나 모르는 카테고리는 "미분류".
+// 카테고리별 유효시간: 블록에 bs(카테고리별 T)가 있으면 그대로, 없으면 Σ(블록 T × 집중도 값)을 bc 또는 미분류로.
+// 고르지 않았거나 모르는 카테고리는 "미분류".
 // rec: [{ d, V }], curV: 이름·순서의 기준. 반환: [{ id, n, t }] (미분류는 id null, 맨 뒤)
 export function categoryTime(rec, curV) {
   const order = [], names = new Map(), acc = new Map();
@@ -114,6 +115,10 @@ export function categoryTime(rec, curV) {
   for (const { d, V } of rec) {
     for (const c of V.categories || []) add(c);
     for (const b of V.blocks || []) {
+      if (hasBs(d, b.id)) { // v1.7: 카테고리별 T 그대로
+        for (const [c, x] of Object.entries(d.bs[b.id])) { const t = +x || 0; if (names.has(c)) acc.set(c, acc.get(c) + t); else un += t; }
+        continue;
+      }
       const m = d.b && d.b[b.id];
       if (!(m in BLK)) continue;
       const t = (+b.t || 0) * BLK[m];
@@ -126,34 +131,36 @@ export function categoryTime(rec, curV) {
   return out;
 }
 
-// 같은 날 유형의 가장 최근(그날보다 앞선) 기록 중 카테고리를 고른 날. 없으면 null.
+// 같은 날 유형의 가장 최근(그날보다 앞선) 기록 중 블록 카테고리별 T(bs)를 넣은 날. 없으면 null. (v1.7: bc → bs)
 export function lastSameType(days, date, type) {
   let best = null;
   for (const [k, d] of Object.entries(days)) {
-    if (k >= date || !d || d.type !== type || !isFilled(d.bc)) continue;
+    if (k >= date || !d || d.type !== type || !Object.values(d.bs || {}).some(isFilled)) continue;
     if (!best || k > best) best = k;
   }
   return best;
 }
 
-// 항목 연속 기록. ○ = 이어짐, △·✕ = 끊김, –·미입력·기록 없는 날 = 건너뜀.
-// current: date부터 거꾸로, longest: 전체 기록에서. 항목 id 기준(버전 무관).
-export function itemStreak(days, itemId, date) {
+// 항목 연속 기록(v1.7 규칙). markOf(d) → 'o' | 't' | 'x' | null
+//   ○ = 이어지고 +1 / △ 한 번 = 보류(끊기지도 세지도 않음) / △ 두 번 연속 = 끊김 / ✕ = 끊김
+//   null(–·미입력·기록 없는 날) = 건너뜀(△ 연속 판정에서도 없는 날로 봄)
+// current: date까지(그 뒤 기록은 안 셈), longest: 전체 기록. pending: date 기준 보류 중인지.
+export function streakRun(marks) {
+  let run = 0, pend = false, longest = 0;
+  for (const m of marks) {
+    if (m === 'o') { run++; pend = false; if (run > longest) longest = run; }
+    else if (m === 't') { if (pend) { run = 0; pend = false; } else pend = true; }
+    else if (m === 'x') { run = 0; pend = false; }
+  }
+  return { run, pending: pend && run > 0, longest };
+}
+export function itemStreak(days, itemId, date, markOf) {
+  const get = markOf || ((d) => { const m = d && d.m && d.m[itemId]; return m === 'o' || m === 't' || m === 'x' ? m : null; });
   const keys = Object.keys(days).sort();
-  let current = 0;
-  for (let i = keys.length - 1; i >= 0; i--) {
-    if (keys[i] > date) continue;
-    const m = days[keys[i]] && days[keys[i]].m && days[keys[i]].m[itemId];
-    if (m === 'o') current++;
-    else if (m === 't' || m === 'x') break;
-  }
-  let longest = 0, run = 0;
-  for (const k of keys) {
-    const m = days[k] && days[k].m && days[k].m[itemId];
-    if (m === 'o') { run++; if (run > longest) longest = run; }
-    else if (m === 't' || m === 'x') run = 0;
-  }
-  return { current, longest };
+  const marks = keys.map((k) => [k, get(days[k], k)]).filter(([, m]) => m);
+  const upto = streakRun(marks.filter(([k]) => k <= date).map(([, m]) => m));
+  const all = streakRun(marks.map(([, m]) => m));
+  return { current: upto.run, longest: all.longest, pending: upto.pending };
 }
 
 // 이달 Passive 위반 메모 목록(날짜순): △·✕ 이고 메모가 있는 것

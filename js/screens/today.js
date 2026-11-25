@@ -1,5 +1,5 @@
 // 오늘 화면
-import { scoreDay, tMark, penOf } from '../scoring.js';
+import { scoreDay, tMark, penOf, markOf, itemMark, applyAuto, comboMax, bsSum, hasBs } from '../scoring.js';
 import { sealSVG } from '../charts.js';
 import { backupReminder, itemStreak, lastSameType } from '../stats.js';
 import { renderCreed, hasCreed } from '../creed.js';
@@ -7,8 +7,10 @@ import { esc, fmt1, fmt2, parse, addDays, monday, WD, hhmm } from '../format.js'
 
 export const DAYTYPES = [['weekday', '평일'], ['weekend', '주말'], ['family', '가족·행사'], ['trip', '출장·여행']];
 
-function markBtns(id, val, allowNa) {
-  const b = (k, l, c, al) => `<button type="button" class="mk ${c}" data-mark="${id}" data-val="${k}" aria-pressed="${val === k}" aria-label="${al}">${l}</button>`;
+// auto: 직접 누른 값이 없을 때 보이는 자동 값(작은 "자동" 표시)
+function markBtns(id, val, allowNa, auto = null) {
+  const on = (k) => val === k || (!val && auto === k);
+  const b = (k, l, c, al) => `<button type="button" class="mk ${c}${!val && auto === k ? ' auto' : ''}" data-mark="${id}" data-val="${k}" aria-pressed="${on(k)}" aria-label="${al}${!val && auto === k ? ' (자동)' : ''}">${l}</button>`;
   return `<div class="marks">${b('o', '○', '', '잘 지킴')}${b('t', '△', 'half', '절반')}${b('x', '✕', 'zero', '못 지킴')}${allowNa ? b('na', '–', 'na', '오늘 해당 없음') : ''}</div>`;
 }
 
@@ -44,10 +46,36 @@ function a1Text(d, it) {
   const a = String(d.a1 || '').trim();
   return a ? `오늘의 A1: ${esc(a)}` : `아침에 A1을 적지 않았습니다${it.h ? ' · ' + esc(it.h) : ''}`;
 }
-// 블록 카테고리 칩: 글자 크게 + 아래 작은 이름. 하나만, 다시 누르면 해제.
+// v1.7 블록 입력: 카테고리 칩을 누를 때마다 tapStep(기본 1T)씩 더한다. 길게 누르면 그 칩 0.
+const fmtH = (x) => String(Math.round(+x * 2) / 2);
+export const stepOf = (V) => (+V.tapStep === 0.5 ? 0.5 : 1);
 function catChips(V, d, b) {
-  const cur = (d.bc || {})[b.id];
-  return `<div class="cats" role="group" aria-label="${esc(b.h)} 카테고리" style="--n:${V.categories.length}">${V.categories.map((c) => `<button type="button" class="cat" data-bc="${esc(b.id)}" data-cat="${esc(c.id)}" aria-pressed="${cur === c.id}" aria-label="${esc(c.id)} ${esc(c.n)}"><b>${esc(c.id)}</b><small>${esc(c.n)}</small></button>`).join('')}</div>`;
+  const o = (d.bs || {})[b.id] || {};
+  return `<div class="cats" role="group" aria-label="${esc(b.h)} 카테고리" style="--n:${V.categories.length}">${V.categories.map((c) => {
+    const n = +o[c.id] || 0;
+    return `<button type="button" class="cat${n ? ' has' : ''}" data-bs="${esc(b.id)}" data-cat="${esc(c.id)}" aria-label="${esc(c.id)} ${esc(c.n)} ${fmtH(n)}T"><b>${esc(c.id)}${n ? ` <i>${fmtH(n)}</i>` : ''}</b><small>${esc(c.n)}</small></button>`;
+  }).join('')}</div>`;
+}
+// 그날 블록 T(bs 합계 또는 집중도 × T, 입력 없으면 0)
+const blkNow = (d, b) => (hasBs(d, b.id) ? bsSum(d.bs[b.id]) : (({ o: 1, t: 0.5, x: 0 })[(d.b || {})[b.id]] ?? 0) * b.t);
+// 연속 기록 문구: "연속 5 · 최장 12", 보류 중이면 "연속 2 (보류) · 최장 12"
+function streakTxt(S, ctx, it, cur) {
+  const vers = S.data.versions, cv = ctx.curV();
+  const r = itemStreak(S.data.days, it.id, cur, (dd) => {
+    if (!dd) return null;
+    const Vd = vers[dd.v] || cv;
+    if (it.kind === 'time' && !(Vd && Vd.virtues.some((v) => v.items.some((i) => i.id === it.id && i.kind === 'time')))) return null;
+    return itemMark(dd, it, Vd);
+  });
+  return `<span class="stk">연속 ${r.current}${r.pending ? ' (보류)' : ''} · 최장 ${r.longest}</span>`;
+}
+
+// v1.7: 보고 있는 날의 기록 버전이 현재 버전과 다르면 안내 띠
+function retagBand(ctx, d, missing) {
+  const { S } = ctx, cid = ctx.curId();
+  if (missing || !S.data.days[S.cur] || !d.v || d.v === cid || !S.data.versions[d.v]) return '';
+  if (S.retagAsk === S.cur) return `<div class="banner retag" role="status">이 날의 점수가 새 기준으로 다시 계산됩니다. <button type="button" class="chip" data-retag="yes">바꾸기</button><button type="button" class="chip" data-retag="no">취소</button></div>`;
+  return `<div class="banner retag">이 날은 예전 기준(${esc(S.data.versions[d.v].name)})으로 채점한 기록입니다. <button type="button" class="chip" data-retag="ask">지금 기준으로 바꾸기</button></div>`;
 }
 
 export function render(ctx) {
@@ -59,6 +87,7 @@ export function render(ctx) {
   h += `<div class="datebar"><button type="button" class="iconbtn" data-nav="-1" aria-label="전날">‹</button>
     <div class="d">${dt.getMonth() + 1}월 ${dt.getDate()}일 (${WD[dt.getDay()]})<small>${cur === ctx.today() ? '오늘' : esc(cur)} · ${esc(V.name)}</small></div>
     <button type="button" class="iconbtn" data-nav="1" aria-label="다음날">›</button><button type="button" class="iconbtn" data-nav="0" aria-label="오늘로">⌂</button></div>
+    ${retagBand(ctx, d, missing)}
     ${creedCard(S, d, ctx.curV())}
     ${hasA1(V) || hasA1(ctx.curV()) ? `<label class="f a1in">오늘의 A1 (꼭 해야 할 중요한 일 하나)<input class="in" data-a1="1" value="${esc(d.a1 || '')}" enterkeyhint="done"></label>` : ''}
     <div class="chips" role="group" aria-label="날 유형">${DAYTYPES.map(([k, l]) => `<button type="button" class="chip" data-type="${k}" aria-pressed="${d.type === k}">${l}</button>`).join('')}</div>`;
@@ -79,20 +108,27 @@ export function render(ctx) {
     if (Array.isArray(v.creed) && v.creed.length) h += `<p class="vcreed">${v.creed.map(esc).join(' ')}</p>`;
     for (const it of v.items) {
       const mk = d.m[it.id];
-      const stk = it.streak ? (() => { const r = itemStreak(S.data.days, it.id, cur); return `<small class="stk">연속 ${r.current}일 · 최장 ${r.longest}일</small>`; })() : '';
+      const stk = streakTxt(S, ctx, it, cur);
       if (it.kind === 'time') {
-        h += `<div class="item"><div class="t">${esc(it.t)} <span class="tval" id="tVal">${s.T === null ? '' : fmt1(s.T) + 'T → ' + Math.round(tMark(s.T, V) * 100) + '%'}</span>${it.h ? `<small>${esc(it.h)}</small>` : ''}</div>
+        h += `<div class="item"><div class="t">${esc(it.t)} ${stk} <span class="tval" id="tVal">${s.T === null ? '' : fmt1(s.T) + 'T → ' + Math.round(tMark(s.T, V) * 100) + '%'}</span>${it.h ? `<small>${esc(it.h)}</small>` : ''}</div>
           <div class="marks"><button type="button" class="mk na" data-mark="${esc(it.id)}" data-val="${mk === 'na' ? '' : 'na'}" aria-pressed="${mk === 'na'}" aria-label="오늘 해당 없음">–</button></div></div>`;
         if (mk !== 'na') {
           const lvBtns = (b) => `<div class="lv" role="group" aria-label="집중도">${[['o', '온전히'], ['t', '보통'], ['x', '미흡']].map(([k, l]) => `<button type="button" class="lvb lv-${k}" data-mark="blk:${esc(b.id)}" data-val="${k}" aria-pressed="${d.b[b.id] === k}">${l}</button>`).join('')}</div>`;
           if (cats) {
-            const src = filled(d.bc) ? null : lastSameType(S.data.days, cur, d.type);
+            const st = stepOf(V), anyIn = filled(d.bs) || filled(d.b);
+            const src = anyIn ? null : lastSameType(S.data.days, cur, d.type);
             const tname = (DAYTYPES.find(([k]) => k === d.type) || [, '같은 유형'])[1];
-            h += `<p class="note" style="margin:6px 0 0">시간대마다 집중도와 카테고리를 고르세요. 한 일은 적고 싶을 때만 적습니다(선택). 온전히 = 전부, 보통 = 절반, 미흡 = 0으로 셉니다.</p>
-            ${src ? `<div class="chips"><button type="button" class="chip" data-bcfill="${esc(src)}">지난 ${esc(tname)}${josaGwa(tname)} 같게 채우기</button><span class="note">카테고리만 복사 (${+src.slice(5, 7)}/${+src.slice(8)})</span></div>` : ''}
-            <div class="blocks">${V.blocks.map((b) => `<div class="blk wc"><div class="h">${esc(b.h)}<small>${fmt1(b.t)}T · ${esc(b.n)}</small></div>${lvBtns(b)}
+            h += `<p class="note" style="margin:6px 0 0">카테고리 칩을 누를 때마다 ${st === 1 ? '1T(30분)' : '0.5T(15분)'}씩 더합니다. 잘못 누른 칩은 길게 누르면 0이 됩니다. 칩을 안 쓴 블록은 온전히 = 전부, 보통 = 절반, 미흡 = 0으로 셉니다. 한 일은 적고 싶을 때만(선택).</p>
+            ${src ? `<div class="chips"><button type="button" class="chip" data-bsfill="${esc(src)}">지난 ${esc(tname)}${josaGwa(tname)} 같게 채우기</button><span class="note">카테고리와 T 복사 (${+src.slice(5, 7)}/${+src.slice(8)})</span></div>` : ''}
+            <div class="blocks">${V.blocks.map((b) => {
+              const has = hasBs(d, b.id), now = blkNow(d, b), rest = b.t - now;
+              const btns = has
+                ? `<div class="lv" role="group" aria-label="빠른 입력"><button type="button" class="lvb lv-rest" data-bsrest="${esc(b.id)}"${rest > 1e-9 ? '' : ' disabled'}>남은 T 채우기</button><button type="button" class="lvb lv-clr" data-bsclr="${esc(b.id)}">지우기</button></div>`
+                : lvBtns(b);
+              return `<div class="blk wc"><div class="h">${esc(b.h)}<small>${fmt1(b.t)}T · ${esc(b.n)}</small><small class="bsum">합계 ${fmtH(now)} / ${fmtH(b.t)}T</small><small class="bsmsg" data-bsmsg="${esc(b.id)}" role="status"></small></div>${btns}
               ${catChips(V, d, b)}
-              <input class="in" data-btext="${esc(b.id)}" placeholder="한 일 (선택)${b.ex ? ' · 예: ' + esc(b.ex) : ''}" value="${esc((d.bt || {})[b.id] || '')}" aria-label="${esc(b.h)} 한 일 (선택)"></div>`).join('')}</div>`;
+              <input class="in" data-btext="${esc(b.id)}" placeholder="한 일 (선택)${b.ex ? ' · 예: ' + esc(b.ex) : ''}" value="${esc((d.bt || {})[b.id] || '')}" aria-label="${esc(b.h)} 한 일 (선택)"></div>`;
+            }).join('')}</div>`;
           } else {
           h += `<p class="note" style="margin:6px 0 0">시간대마다 한 일을 적고 집중도를 고르세요. 온전히 = 전부, 보통 = 절반, 미흡 = 0으로 셉니다.</p>
           <div class="blocks">${V.blocks.map((b) => `<div class="blk"><div class="h">${esc(b.h)}<small>${fmt1(b.t)}T · ${esc(b.n)}</small></div>
@@ -104,8 +140,11 @@ export function render(ctx) {
           <label class="f">직접 입력 (T, 블록 무시)<input class="in" type="number" step="0.5" min="0" inputmode="decimal" data-field="tOverride" value="${esc(d.tOverride ?? '')}"></label></div>`;
         }
       } else {
-        const sub = it.kind === 'a1' ? `<small id="a1Line">${a1Text(d, it)}</small>` : it.h ? `<small>${esc(it.h)}</small>` : '';
-        h += `<div class="item"><div class="t">${esc(it.t)}${sub}${stk}</div>${markBtns(esc(it.id), mk, true)}</div>`;
+        const sub = it.kind === 'a1' ? `<small id="a1Line">${a1Text(d, it)}</small>`
+          : it.kind === 'combo' ? `<small class="combo">오늘 최장 ${fmtH(comboMax(d))}콤보${it.h ? ' · ' + esc(it.h) : ''}</small>`
+          : it.h ? `<small>${esc(it.h)}</small>` : '';
+        const au = d.auto && d.auto[it.id] ? d.auto[it.id].val : null;
+        h += `<div class="item"><div class="t">${esc(it.t)} ${stk}${sub}</div>${markBtns(esc(it.id), mk, true, au)}</div>`;
       }
     }
     h += '</section>';
@@ -161,10 +200,52 @@ export function click(t, ctx) {
     return;
   }
   if (ds.pass) { ctx.editDay((d) => { if (ds.val === 'o') { delete d.p[ds.pass]; if (d.pm) delete d.pm[ds.pass]; } else d.p[ds.pass] = ds.val; }); return; }
-  if (ds.bc) { ctx.editDay((d) => { d.bc = d.bc || {}; if (d.bc[ds.bc] === ds.cat) delete d.bc[ds.bc]; else d.bc[ds.bc] = ds.cat; }); return; }
-  if (ds.bcfill) {
-    const src = S.data.days[ds.bcfill]; if (!src || !src.bc) return;
-    ctx.editDay((d) => { const { V } = ctx.verOfDay(d); d.bc = {}; for (const b of V.blocks) if (src.bc[b.id] != null) d.bc[b.id] = src.bc[b.id]; });
+  if (ds.retag === 'ask') { S.retagAsk = S.cur; ctx.render(); return; }
+  if (ds.retag === 'no') { S.retagAsk = null; ctx.render(); return; }
+  if (ds.retag === 'yes') {
+    S.retagAsk = null;
+    const id = ctx.curId();
+    ctx.editDay((d) => { d.v = id; applyAuto(d, ctx.curV()); });
+    ctx.setStatus && ctx.setStatus('이 날을 지금 기준으로 바꿨습니다');
+    return;
+  }
+  if (ds.bs !== undefined && ds.cat !== undefined) {
+    // 길게 누른 뒤 손을 뗄 때 오는 누름은 무시
+    if (S.lpIgnore && Date.now() < S.lpIgnore) { S.lpIgnore = 0; return; }
+    S.lpIgnore = 0;
+    const d0 = ctx.getDay(S.cur), { V } = ctx.verOfDay(d0), b = V.blocks.find((x) => x.id === ds.bs); if (!b) return;
+    const st = stepOf(V), o = (d0.bs || {})[b.id] || {};
+    if (bsSum(o) + st > b.t + 1e-9) { capMsg(b); return; }
+    ctx.editDay((d) => {
+      d.bs = { ...(d.bs || {}) };
+      const x = { ...(d.bs[b.id] || {}) }, v = +x[ds.cat] || 0;
+      delete x[ds.cat]; x[ds.cat] = v + st; // 마지막으로 누른 카테고리를 맨 뒤로(남은 T 채우기 대상)
+      d.bs[b.id] = x; if (d.b) delete d.b[b.id];
+      applyAuto(d, V);
+    });
+    return;
+  }
+  if (ds.bsrest) {
+    ctx.editDay((d) => {
+      const { V } = ctx.verOfDay(d), b = V.blocks.find((x) => x.id === ds.bsrest);
+      if (!b || !hasBs(d, b.id)) return;
+      const x = { ...d.bs[b.id] }, rest = b.t - bsSum(x), last = Object.keys(x).pop();
+      if (!(rest > 1e-9)) return;
+      const v = +x[last] || 0; delete x[last]; x[last] = v + rest;
+      d.bs = { ...d.bs, [b.id]: x };
+      applyAuto(d, V);
+    });
+    return;
+  }
+  if (ds.bsclr) { ctx.editDay((d) => { clearCat(d, ds.bsclr, null); applyAuto(d, ctx.verOfDay(d).V); }); return; }
+  if (ds.bsfill) {
+    const src = S.data.days[ds.bsfill]; if (!src || !src.bs) return;
+    ctx.editDay((d) => {
+      const { V } = ctx.verOfDay(d); d.bs = {};
+      for (const b of V.blocks) if (hasBs(src, b.id)) { d.bs[b.id] = { ...src.bs[b.id] }; if (d.b) delete d.b[b.id]; }
+      if (!filled(d.bs)) delete d.bs;
+      applyAuto(d, V);
+    });
     return;
   }
   if (ds.drink) { ctx.editDay((d) => { const v = ds.drink === 'yes'; d.drink = d.drink === v ? null : v; }); }
@@ -187,3 +268,39 @@ export function input(el, ctx) {
     ctx.editDay((d) => { d[f] = num ? (raw === '' ? (f === 'tAdj' ? 0 : null) : +raw) : raw; }, false);
   }
 }
+
+// ---------- v1.7: 칩 길게 누르기(0.5초) = 그 칩 0T ----------
+// cat이 null이면 블록 전체를 지운다
+function clearCat(d, bid, cat) {
+  if (!d.bs || !d.bs[bid]) return;
+  const x = { ...d.bs[bid] };
+  if (cat === null) for (const k of Object.keys(x)) delete x[k]; else delete x[cat];
+  d.bs = { ...d.bs };
+  if (Object.keys(x).length) d.bs[bid] = x; else delete d.bs[bid];
+  if (!Object.keys(d.bs).length) delete d.bs;
+}
+function capMsg(b) {
+  const e = document.querySelector(`[data-bsmsg="${CSS.escape(b.id)}"]`); if (!e) return;
+  e.textContent = `이 블록은 ${fmtH(b.t)}T까지입니다`;
+  clearTimeout(e._t); e._t = setTimeout(() => { e.textContent = ''; }, 2000);
+}
+export const LONG_MS = 500;
+let lp = null;
+function lpCancel() { if (lp) { clearTimeout(lp.timer); lp = null; } }
+export function pointerdown(e, ctx) {
+  const t = e.target && e.target.closest ? e.target.closest('button[data-bs][data-cat]') : null;
+  lpCancel();
+  if (!t || (e.button !== undefined && e.button > 0)) return;
+  const bid = t.dataset.bs, cat = t.dataset.cat;
+  lp = { x: e.clientX, y: e.clientY, fired: false, timer: setTimeout(() => {
+    lp.fired = true; ctx.S.lpIgnore = Infinity;
+    ctx.editDay((d) => { clearCat(d, bid, cat); applyAuto(d, ctx.verOfDay(d).V); });
+  }, LONG_MS) };
+}
+export function pointermove(e) { if (lp && !lp.fired && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > 10) lpCancel(); }
+export function pointerup(e, ctx) {
+  if (!lp) return;
+  const fired = lp.fired; lpCancel();
+  if (fired) ctx.S.lpIgnore = Date.now() + 700;
+}
+export function contextmenu(e) { if (e.target && e.target.closest && e.target.closest('button[data-cat]')) e.preventDefault(); }

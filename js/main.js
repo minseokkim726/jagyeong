@@ -1,6 +1,7 @@
 // 앱 시작, 상태, 자동 저장, 화면 전환, 서비스 워커 등록
 import * as repo from './repo.js';
 import { scoreSnapshot } from './scoring.js';
+import { retagDay, RETAG_MSG } from './versions.js';
 import { clone, hhmm, logicalToday, parse } from './format.js';
 import * as today from './screens/today.js';
 import * as trends from './screens/trends.js';
@@ -64,9 +65,18 @@ function editDay(fn, rerender = true) {
 
 async function reload() { S.data = await repo.load(); }
 
+// v1.7: 현재 버전을 바꾼 뒤 부른다. 오늘(새벽 4시 기준) 기록이 옛 버전이면 새 버전으로 바꾸고 저장. 바꿨으면 알림 문구.
+async function retagToday() {
+  const k = logicalToday(), nd = retagDay(S.data.days[k], curV());
+  if (!nd) return '';
+  S.data.days[k] = nd;
+  await flush('days', k);
+  return RETAG_MSG;
+}
+
 // 화면 모듈에 넘기는 도구
 const ctx = {
-  S, repo, setStatus, render, reload, queue, editDay, getDay, verOfDay, curId, curV, flushAll,
+  S, repo, setStatus, render, reload, retagToday, queue, editDay, getDay, verOfDay, curId, curV, flushAll,
   today: () => logicalToday(),
   go(tab) { S.tab = tab; if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab); render(); window.scrollTo(0, 0); },
 };
@@ -98,6 +108,14 @@ document.addEventListener('change', (e) => {
   const sc = !curId() ? welcome : SCREENS[S.tab];
   if (sc.change) sc.change(e.target, ctx, e);
 });
+// v1.7: 칩 길게 누르기
+for (const ev of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'contextmenu']) {
+  document.addEventListener(ev, (e) => {
+    const sc = !curId() ? welcome : SCREENS[S.tab];
+    const fn = sc && sc[ev === 'pointercancel' ? 'pointerup' : ev];
+    if (fn) fn(e, ctx);
+  }, ev === 'pointermove' ? { passive: true } : undefined);
+}
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (SCREENS[h] && h !== S.tab) { S.tab = h; render(); } });
 // 화면을 떠나기 전에 기다리던 저장을 바로 한다
 document.addEventListener('visibilitychange', () => {
