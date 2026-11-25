@@ -32,7 +32,8 @@
 <script type="module">
 import { scoreDay, tFromDay, tMark, scoreSnapshot } from './js/scoring.js';
 import { logicalToday, monday, addDays } from './js/format.js';
-import { streak, monthStats, virtueRates, verOf, backupReminder, isCreedOnly } from './js/stats.js';
+import { streak, monthStats, virtueRates, verOf, backupReminder, isCreedOnly, virtueRatesCompare, categoryTime, lastSameType, itemStreak, passiveNotes } from './js/stats.js';
+import { click as todayClick, input as todayInput } from './js/screens/today.js';
 import { renderCreed, hasCreed } from './js/creed.js';
 import { render as renderToday, creedCard } from './js/screens/today.js';
 import { normalizeVersion, validateVersion, weightWarnings, finalizeVersion, readImport, planMerge, canDeleteVersion, uniqueId, SAMPLE_VERSION } from './js/versions.js';
@@ -191,7 +192,8 @@ run('mixed', () => {
   const D = { '2026-11-01': { date: '2026-11-01', v: 'A', m: { a1: 'o' }, b: {}, p: {} }, '2026-11-02': { date: '2026-11-02', v: 'B', m: { a1: 'x', n1: 'o' }, b: {}, p: {} } };
   const st = monthStats(D, { A, B }, 'B', '2026-11', '2026-11-30');
   const vr = virtueRates(st.rec, B);
-  eq('같은 id 덕목 합산: (10+0)/(10+30)=25%', vr.map((x) => [x.id, Math.round(x.pct)]), [['k', 25], ['n', 100]]);
+  // v1.5: 달성률은 배점과 무관(받은 점수 ÷ 만점을 배점으로 나눠 합침) → ○ 하루 + ✕ 하루 = 50%
+  eq('같은 id 덕목 합산(배점 무관): (1+0)/(1+1)=50%', vr.map((x) => [x.id, Math.round(x.pct)]), [['k', 50], ['n', 100]]);
 });
 
 group('백업 알림 시점 (backupReminder)');
@@ -404,6 +406,152 @@ run('creed-current', () => {
   eq('(3) creedCard 직접: creed 없는 버전 → 빈 결과', creedCard({ cur: 'x', creedOpen: null }, day('x'), OLD), '');
 });
 
+// ---------- v1.5: 2027 형식 새 필드 (중립 견본, 사명서 문구 없음) ----------
+group('v1.5 새 필드 (카테고리 · A1 · 연속 기록 · 묶음 · Passive 메모 · 달성률 대비)');
+const N27 = normalizeVersion({
+  ...clone(T26), id: 'N27', name: '시험 2027',
+  categories: [{ id: 'A', n: '일' }, { id: 'B', n: '공부' }, { id: 'C', n: '쉼' }],
+  mission: { paragraphs: ['문단1'], motto: '좌우명' }, weighting: { base: 6, pool: 46, note: '메모' }, extraTop: { keep: 1 },
+});
+N27.virtues[0].group = '묶음갑'; N27.virtues[1].group = '묶음갑'; N27.virtues[2].group = '묶음을';
+N27.virtues[0].creed = ['원칙 하나.', '원칙 둘.'];
+N27.virtues[3].items[0].streak = true;                       // i4a
+N27.virtues[5].items[1].kind = 'a1';                         // i6b
+N27.virtues[8].items[0].kind = 'combo';                      // i9a
+N27.virtues[7].items[0].menu = ['메뉴1', '메뉴2'];           // i8a
+N27.passive[0].model = '본보기';
+run('v15-score', () => {
+  const d = day({ v: 'N27', m: allO(), b: allBlocks() });
+  eq('a1·combo 항목도 보통 항목처럼 채점(전부 ○ + 블록 온전히 = 100)', r2(scoreDay(d, N27).pct), 100);
+  eq('a1 항목 ✕ → 보통 항목 ✕와 같은 점수', r2(scoreDay(day({ v: 'N27', m: { ...allO(), i6b: 'x' }, b: allBlocks() }), N27).pct), r2(scoreDay(day({ m: { ...allO(), i6b: 'x' }, b: allBlocks() }), T26).pct));
+  eq('combo 항목 – → 만점에서 빠짐', r2(scoreDay(day({ v: 'N27', m: { ...allO(), i9a: 'na' }, b: allBlocks() }), N27).pct), 100);
+  eq('새 필드(bc·a1·pm·menu)는 점수에 영향 없음', r2(scoreDay({ ...REF, v: 'T26', bc: { b1: 'A' }, a1: '일', pm: { p10a: 'm' }, menu: { i8a: ['x'] } }, T26).pct), 91.83);
+});
+run('v15-keep', () => {
+  // 모르는 필드 보존: 버전(최상위·덕목·항목·Passive·카테고리) — 형식 맞추기·새 버전 저장·버전 가져오기
+  const src = { ...clone(N27), virtues: clone(N27.virtues) };
+  src.virtues[0].foo = 'vf'; src.virtues[0].items[0].bar = 'ib'; src.passive[0].rules[0].baz = 'rb'; src.categories[0].color = 'red';
+  const pick = (V) => [V.mission, V.weighting, V.extraTop, V.categories, V.virtues[0].group, V.virtues[0].creed, V.virtues[0].foo, V.virtues[0].items[0].bar,
+    V.virtues[3].items[0].streak, V.virtues[5].items[1].kind, V.virtues[8].items[0].kind, V.virtues[7].items[0].menu, V.passive[0].model, V.passive[0].rules[0].baz];
+  const want = pick(src);
+  eq('normalizeVersion: 모르는 필드 모두 유지', pick(normalizeVersion(src)), want);
+  eq('새 버전 저장(finalizeVersion): 모두 유지', pick(finalizeVersion(clone(src), { id: 'z', created: 'c' })), want);
+  const vr = readImport(JSON.stringify(src));
+  eq('버전 가져오기(readImport → planMerge): 모두 유지', pick(planMerge({ versions: {}, days: {}, weeks: {}, months: {} }, { versions: { [src.id]: vr.version }, days: {} }).put.versions[0]), want);
+  // 백업 내보내기 모양(app/schema) → 다시 읽기
+  const dayX = { date: '2026-11-25', v: 'N27', m: {}, b: {}, p: { p10a: 't' }, bc: { b1: 'A' }, a1: '오늘 할 일', pm: { p10a: '메모' }, menu: { i8a: ['메뉴1'] }, futureField: 7, at: '2026-11-25T10:00:00Z' };
+  const bk = readImport(JSON.stringify({ app: 'jagyeongmun', schema: 1, current: 'N27', versions: { N27: src }, days: { '2026-11-25': dayX }, weeks: {}, months: {} }));
+  const pb = planMerge({ versions: {}, days: {}, weeks: {}, months: {} }, bk);
+  eq('백업 합치기: 기록의 bc·a1·pm·menu·모르는 필드 유지', (({ bc, a1, pm, menu, futureField }) => ({ bc, a1, pm, menu, futureField }))(pb.put.days[0]), { bc: { b1: 'A' }, a1: '오늘 할 일', pm: { p10a: '메모' }, menu: { i8a: ['메뉴1'] }, futureField: 7 });
+  eq('백업 합치기: 버전 모르는 필드 유지', pick(pb.put.versions[0]), want);
+  const art = readImport({ version: 'N27', days: { '2026-11-25': dayX }, weeks: {}, months: {} });
+  eq('아티팩트 합치기: 새 필드 유지', planMerge({ versions: { N27 }, days: {}, weeks: {}, months: {} }, art).put.days[0].bc, { b1: 'A' });
+  eq('덕목 원칙: 줄바꿈 글 → 문장 배열, 빈 줄 버림 / 비면 필드 없음', [normalizeVersion({ ...clone(T26), virtues: [{ ...clone(T26.virtues[0]), creed: '가.\n\n 나. ' }] }).virtues[0].creed, 'creed' in normalizeVersion({ ...clone(T26), virtues: [{ ...clone(T26.virtues[0]), creed: ['', ' '] }] }).virtues[0]], [['가.', '나.'], false]);
+  eq('카테고리 없는 버전은 필드 없음(기능 숨김)', 'categories' in normalizeVersion(clone(T26)), false);
+});
+run('v15-cat', () => {
+  // categoryTime: Σ(블록 T × 집중도). b1=6 b2=5 b3=3 b4=5 b5=4 b6=5 b7=5
+  const d1 = day({ date: '2026-11-02', v: 'N27', b: { b1: 'o', b2: 't', b3: 'x', b4: 'o' }, bc: { b1: 'A', b2: 'A', b3: 'B', b4: 'Z' } });
+  const d2 = day({ date: '2026-11-03', v: 'N27', b: { b1: 'o', b5: 'o' }, bc: { b5: 'C' } });
+  const d3 = day({ date: '2026-11-04', v: 'T26', b: { b1: 't' }, bc: { b1: 'B' } }); // 카테고리 없는 옛 버전 기록
+  const ct = categoryTime([{ d: d1, V: N27 }, { d: d2, V: N27 }, { d: d3, V: T26 }], N27);
+  eq('카테고리별 합: A=6+2.5, B=0(미흡)+3(옛 버전 기록도 id로), C=4, 미분류=5(모르는 Z)+6(안 고름)', ct.map((c) => [c.id, c.t]), [['A', 8.5], ['B', 3], ['C', 4], [null, 11]]);
+  eq('미분류 이름', ct[3].n, '미분류');
+  eq('기록 없으면 모두 0', categoryTime([], N27).map((c) => c.t), [0, 0, 0, 0]);
+  // lastSameType
+  const D = { '2026-11-02': { type: 'weekday', bc: { b1: 'A' } }, '2026-11-03': { type: 'weekday', bc: {} }, '2026-11-01': { type: 'weekend', bc: { b1: 'B' } }, '2026-10-30': { type: 'weekday', bc: { b2: 'C' } }, '2026-11-06': { type: 'weekday', bc: { b1: 'C' } } };
+  eq('같은 유형 최근 기록: 그날보다 앞선 날 중 bc 있는 가장 늦은 날', [lastSameType(D, '2026-11-05', 'weekday'), lastSameType(D, '2026-11-05', 'weekend'), lastSameType(D, '2026-11-02', 'weekday'), lastSameType(D, '2026-11-05', 'trip')], ['2026-11-02', '2026-11-01', '2026-10-30', null]);
+});
+run('v15-streak', () => {
+  const S = (marks) => Object.fromEntries(Object.entries(marks).map(([k, v]) => [k, { m: v === null ? {} : { i4a: v } }]));
+  eq('① ○가 이어지면 늘어남', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'o', '2026-11-03': 'o' }), 'i4a', '2026-11-03'), { current: 3, longest: 3 });
+  eq('② △에서 끊김', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 't', '2026-11-03': 'o' }), 'i4a', '2026-11-03'), { current: 1, longest: 1 });
+  eq('③ ✕에서 끊김(최장은 전체에서)', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'o', '2026-11-03': 'x', '2026-11-04': 'o' }), 'i4a', '2026-11-04'), { current: 1, longest: 2 });
+  eq('④ –(해당 없음)는 건너뜀', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'na', '2026-11-03': 'o' }), 'i4a', '2026-11-03'), { current: 2, longest: 2 });
+  eq('⑤ 기록 없는 날·미입력은 건너뜀', itemStreak({ ...S({ '2026-11-01': 'o', '2026-11-02': null, '2026-11-05': 'o' }) }, 'i4a', '2026-11-06'), { current: 2, longest: 2 });
+  eq('보고 있는 날짜부터 거꾸로(그 뒤 기록은 안 셈)', itemStreak(S({ '2026-11-01': 'o', '2026-11-02': 'o', '2026-11-03': 'x', '2026-11-04': 'o' }), 'i4a', '2026-11-02').current, 2);
+  const mixed = { '2026-11-01': { v: 'T26', m: { i4a: 'o' } }, '2026-11-02': { v: 'N27', m: { i4a: 'o' } } };
+  eq('버전이 바뀌어도 항목 id로 이어짐', itemStreak(mixed, 'i4a', '2026-11-02').current, 2);
+});
+run('v15-rates', () => {
+  const now = [{ k: '2026-11-02', d: day({ v: 'N27', m: allO(), b: allBlocks() }), V: N27 }];
+  now[0].s = scoreDay(now[0].d, N27);
+  const pv = clone(N27); pv.virtues[0].pts = 40; // 지난달은 배점이 달랐다
+  const pd = day({ v: 'P', m: { ...allO(), i1a: 'x' }, b: allBlocks() });
+  const prev = [{ k: '2026-10-02', d: pd, V: pv, s: scoreDay(pd, pv) }];
+  const r = virtueRatesCompare(now, prev, N27);
+  eq('지난달 대비 %p(배점 무관): 덕목1 100% vs 50% → +50', [Math.round(r[0].pct), Math.round(r[0].prev), Math.round(r[0].delta)], [100, 50, 50]);
+  eq('변화 없는 덕목은 0', Math.round(r[1].delta), 0);
+  eq('지난달 기록이 없으면 대비 생략(null)', virtueRatesCompare(now, [], N27).every((x) => x.delta === null && x.prev === null), true);
+});
+run('v15-pm', () => {
+  // Passive 메모: 오늘 화면 실제 처리기로 저장·삭제
+  const S = { cur: '2026-11-25', creedOpen: null, data: { versions: { N27 }, days: {}, weeks: {}, months: {}, settings: { cur: 'N27' } } };
+  const blank = () => ({ date: S.cur, v: 'N27', type: 'weekday', m: {}, b: {}, bt: {}, p: {}, tAdj: 0, tOverride: null });
+  const ctx = { S, today: () => S.cur, curId: () => 'N27', curV: () => N27, getDay: (k) => S.data.days[k] || blank(), verOfDay: () => ({ V: N27, missing: false }),
+    editDay(fn) { const d = clone(this.getDay(S.cur)); fn(d); S.data.days[S.cur] = d; }, render() {}, flushAll() {}, go() {} };
+  const btn = (ds) => ({ dataset: ds });
+  todayClick(btn({ pass: 'p10a', val: 't' }), ctx);
+  todayInput({ dataset: { pm: 'p10a' }, value: '늦잠' }, ctx);
+  eq('△ 누르고 메모 → pm에 저장', [S.data.days[S.cur].p.p10a, S.data.days[S.cur].pm.p10a], ['t', '늦잠']);
+  todayClick(btn({ pass: 'p10a', val: 'x' }), ctx);
+  eq('✕로 바꿔도 메모 유지', S.data.days[S.cur].pm.p10a, '늦잠');
+  eq('이달 위반 메모 목록', passiveNotes([{ k: S.cur, d: S.data.days[S.cur], V: N27 }]).map((x) => [x.date, x.mark, x.memo]), [['2026-11-25', 'x', '늦잠']]);
+  todayClick(btn({ pass: 'p10a', val: 'o' }), ctx);
+  eq('○로 되돌리면 표시·메모 모두 지움', [S.data.days[S.cur].p.p10a, (S.data.days[S.cur].pm || {}).p10a], [undefined, undefined]);
+  todayInput({ dataset: { pm: 'p10b' }, value: '  ' }, ctx);
+  eq('빈 메모는 저장하지 않음', 'p10b' in (S.data.days[S.cur].pm || {}), false);
+  // 카테고리 칩: 하나만, 다시 누르면 해제 / 지난 같은 유형 채우기(카테고리만)
+  todayClick(btn({ bc: 'b1', cat: 'A' }), ctx); todayClick(btn({ bc: 'b1', cat: 'B' }), ctx);
+  eq('칩: 하나만 고름(B로 바뀜)', S.data.days[S.cur].bc, { b1: 'B' });
+  todayClick(btn({ bc: 'b1', cat: 'B' }), ctx);
+  eq('칩: 다시 누르면 해제', S.data.days[S.cur].bc, {});
+  S.data.days['2026-11-24'] = { date: '2026-11-24', v: 'N27', type: 'weekday', m: { i1a: 'o' }, b: { b1: 'o' }, bt: { b1: '어제 한 일' }, p: {}, bc: { b1: 'A', b2: 'C', old: 'B' } };
+  todayClick(btn({ bcfill: '2026-11-24' }), ctx);
+  const t = S.data.days[S.cur];
+  eq('채우기: 카테고리만 복사(집중도·한 일·없는 블록은 안 옴)', [t.bc, t.b.b1, (t.bt || {}).b1], [{ b1: 'A', b2: 'C' }, undefined, undefined]);
+  // A1 저장·지우기
+  todayInput({ dataset: { a1: '1' }, value: '보고서 끝내기' }, ctx);
+  eq('A1 저장', S.data.days[S.cur].a1, '보고서 끝내기');
+  todayInput({ dataset: { a1: '1' }, value: '' }, ctx);
+  eq('A1 비우면 필드 지움', 'a1' in S.data.days[S.cur], false);
+  eq('A1만 적은 날은 기록한 날로 안 셈', isCreedOnly({ date: 'x', v: 'N27', m: {}, b: {}, p: {}, bt: {}, a1: '할 일' }), true);
+});
+run('v15-render', () => {
+  const S = { cur: '2026-11-25', creedOpen: null, data: { versions: { N27, T26 }, days: {}, weeks: {}, months: {}, settings: { cur: 'N27' } } };
+  const mk = (V) => ({ S, curId: () => V.id, curV: () => V, today: () => S.cur,
+    getDay: (k) => S.data.days[k] || { date: k, v: V.id, type: 'weekday', m: {}, b: {}, bt: {}, p: {}, tAdj: 0, tOverride: null, memo: '', line: '' },
+    verOfDay: (d) => ({ V: S.data.versions[d.v] || V, missing: false }) });
+  S.data.days = {
+    '2026-11-22': { date: '2026-11-22', v: 'N27', type: 'weekday', m: { i4a: 'o' }, b: {}, p: {}, bc: { b1: 'A' } },
+    '2026-11-23': { date: '2026-11-23', v: 'N27', type: 'weekday', m: { i4a: 'na' }, b: {}, p: {} },
+    '2026-11-24': { date: '2026-11-24', v: 'N27', type: 'weekday', m: { i4a: 'o' }, b: {}, p: {} },
+    '2026-11-25': { date: '2026-11-25', v: 'N27', type: 'weekday', m: {}, b: { b1: 'o' }, bt: {}, p: { p11a: 't' }, a1: '오늘 일' },
+  };
+  const box = document.createElement('div');
+  box.innerHTML = renderToday(mk(N27));
+  const q = (s) => box.querySelector(s), qa = (s) => [...box.querySelectorAll(s)];
+  eq('묶음 제목: 바뀌는 자리에만(갑, 을)', qa('.grp').map((e) => e.textContent), ['묶음갑', '묶음을']);
+  eq('덕목 원칙 한 줄(문장 사이 공백)', q('.vcreed').textContent, '원칙 하나. 원칙 둘.');
+  eq('A1 입력 칸 + A1 항목 줄에 "오늘의 A1: …"', [!!q('[data-a1]'), q('[data-a1]').value, q('#a1Line').textContent], [true, '오늘 일', '오늘의 A1: 오늘 일']);
+  eq('연속 기록 줄(– 건너뜀)', q('.stk').textContent, '연속 2일 · 최장 2일');
+  eq('블록마다 카테고리 칩 3개, 블록 7개', [qa('.blk.wc').length, qa('.blk.wc')[0].querySelectorAll('.cat').length, qa('.blk.wc')[0].querySelector('.cat b').textContent], [7, 3, 'A']);
+  eq('카테고리 칩이 "한 일" 칸 위', qa('.blk.wc')[0].querySelector('.cats').compareDocumentPosition(qa('.blk.wc')[0].querySelector('input')) === Node.DOCUMENT_POSITION_FOLLOWING, true);
+  eq('[지난 평일과 같게 채우기] 버튼(bc 비었고 지난 평일에 있음)', q('[data-bcfill]') && [q('[data-bcfill]').dataset.bcfill, q('[data-bcfill]').textContent], ['2026-11-22', '지난 평일과 같게 채우기']);
+  eq('Passive △ 줄 아래 메모 칸, ○ 줄엔 없음', [!!q('[data-pm="p11a"]'), !!q('[data-pm="p10a"]')], [true, false]);
+  eq('Passive 묶음 모델 표시', box.querySelectorAll('details.pass .vh .meta')[0].textContent.includes('본보기'), true);
+  S.data.days['2026-11-25'].bc = { b2: 'B' };
+  box.innerHTML = renderToday(mk(N27));
+  eq('그날 bc가 있으면 채우기 버튼 없음 + 고른 칩 표시', [!!q('[data-bcfill]'), q('[data-bc="b2"][data-cat="B"]').getAttribute('aria-pressed')], [false, 'true']);
+  S.data.days['2026-11-25'].a1 = '';
+  box.innerHTML = renderToday(mk(N27));
+  eq('A1 비었으면 안내 문구', q('#a1Line').textContent.startsWith('아침에 A1을 적지 않았습니다'), true);
+  // 옛 버전(새 필드 없음): 모두 숨김, 화면 그대로
+  S.data.days = { '2026-11-25': { date: '2026-11-25', v: 'T26', type: 'weekday', m: {}, b: {}, bt: {}, p: { p10a: 't' } } };
+  box.innerHTML = renderToday(mk(T26));
+  eq('옛 버전: 칩·A1·묶음·원칙·연속 기록 없음, 블록 옛 모양', [qa('.cat').length, !!q('[data-a1]'), qa('.grp').length, qa('.vcreed').length, qa('.stk').length, qa('.blk').length, qa('.blk.wc').length], [0, false, 0, 0, 0, 7, 0]);
+});
+
 // 사용자 사명서(docs\seed-2026-beta.json)로 확인: 프로젝트 폴더 전체를 열었을 때만(앱 폴더만 열면 건너뜀)
 group('사용자 사명서 정의(docs) 확인 — 앱 폴더 밖 파일');
 try {
@@ -417,6 +565,31 @@ try {
   eq('seed: 11-23 기록 = 91.83 (88.16 / 96, 23T)', snap(scoreDay(REF, V)), { raw: 88.16, max: 96, T: 23, pen: 0, pct: 91.83 });
 } catch (e) {
   skip++; line('seed 파일을 읽을 수 없어 건너뜀 (앱 폴더만 연 경우 정상)', '-', String(e.message || e), '건너뜀', 'skip');
+}
+// 2027 사명서(docs\v2027.json): 결과는 참·거짓과 숫자만 보인다(문구를 표에 내지 않음)
+try {
+  const res = await fetch('../docs/v2027.json', { cache: 'no-store' });
+  if (!res.ok) throw new Error('없음');
+  const raw = JSON.parse(await res.text());
+  const r = readImport(JSON.stringify(raw));
+  const V = normalizeVersion(r.version);
+  eq('v2027: 버전 정의로 읽힘 + 검사 통과', [r.kind, validateVersion(V).length], ['version', 0]);
+  const items = V.virtues.flatMap((v) => v.items);
+  const o = Object.fromEntries(items.filter((i) => i.kind !== 'time').map((i) => [i.id, 'o']));
+  const b = Object.fromEntries(V.blocks.map((x) => [x.id, 'o']));
+  eq('v2027: 전부 ○ + 블록 전부 온전히 = 100', r2(scoreDay({ m: o, b, p: {} }, V).pct), 100);
+  const sNa = scoreDay({ m: { ...o, i8c: 'na' }, b, p: {} }, V);
+  eq('v2027: i8c를 –로 빼면 97.6 / 97.6 = 100', [r2(sNa.raw), r2(sNa.max), r2(sNa.pct)], [97.6, 97.6, 100]);
+  const F = finalizeVersion(clone(raw), { id: raw.id, created: raw.created, from: raw.from });
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  eq('v2027: 새 버전 저장 모양에서도 새 필드 그대로(mission·weighting·categories·덕목 group/creed·항목 kind/streak/menu·Passive model)', [
+    same(F.mission, raw.mission), same(F.weighting, raw.weighting), same(F.categories, raw.categories),
+    raw.virtues.every((v, i) => same(F.virtues[i].group, v.group) && same(F.virtues[i].creed, v.creed)),
+    raw.virtues.every((v, i) => v.items.every((it, k) => same(F.virtues[i].items[k].kind, it.kind) && same(F.virtues[i].items[k].streak, it.streak) && same(F.virtues[i].items[k].menu, it.menu))),
+    raw.passive.every((g, i) => same(F.passive[i].model, g.model)), same(F.creed, raw.creed)], [true, true, true, true, true, true, true]);
+  eq('v2027: 카테고리 6 · a1 항목 1 · combo 1 · 연속 기록 항목 2', [V.categories.length, items.filter((i) => i.kind === 'a1').length, items.filter((i) => i.kind === 'combo').length, items.filter((i) => i.streak).length], [6, 1, 1, 2]);
+} catch (e) {
+  skip++; line('v2027 파일을 읽을 수 없어 건너뜀 (앱 폴더만 연 경우 정상)', '-', String(e.message || e), '건너뜀', 'skip');
 }
 
 const sum = document.getElementById('summary');

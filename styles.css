@@ -167,3 +167,32 @@ section.ed{padding:4px 0}
 .creedline .chip{white-space:nowrap;flex:none}
 .creedstat{margin:-4px 0 4px}
 textarea.creedta{font:16px/1.7 var(--sans);min-height:calc(10 * 1.7em + 20px)}
+/* v1.5: 덕목 묶음·원칙, A1, 연속 기록, 블록 카테고리, Passive 메모, 추이 대비 */
+.grp{margin:18px 0 0;font:700 13px var(--sans);color:var(--seal);letter-spacing:.04em}
+.vcreed{margin:4px 0 2px;font:13px/1.6 var(--serif);color:var(--mute);word-break:keep-all}
+.a1in{margin:8px 0 2px;color:var(--ink);font-weight:600}
+.item .t small.stk{color:var(--seal);font-variant-numeric:tabular-nums}
+.blk.wc{grid-template-columns:minmax(0,1fr) auto;row-gap:6px}
+.blk.wc .cats,.blk.wc input.in{grid-column:1/-1}
+.blk.wc .cats{grid-row:2}.blk.wc input.in{grid-row:3}
+.cats{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:4px}
+.cat{border:1px solid var(--line);background:var(--bg);border-radius:10px;min-height:48px;padding:3px 2px;cursor:pointer;display:grid;align-content:center;justify-items:center;line-height:1.1}
+.cat b{font:800 18px var(--serif)}
+.cat small{font-size:11px;color:var(--mute);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cat[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.cat[aria-pressed=true] small{color:var(--bg)}
+input.pmemo{margin:0 0 8px}
+.bars.cmp .bar{grid-template-columns:4.5em minmax(0,1fr) 3.2em 3.6em}
+.bar .dl{text-align:right;font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bars.ctime .bar{grid-template-columns:7em minmax(0,1fr) 3.6em}
+.bars.ctime .bar>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+details.pnotes{background:var(--paper);border-radius:12px;padding:4px 14px;margin:8px 0}
+details.pnotes summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:14px}
+details.pnotes ul{margin:0 0 10px;padding-left:18px;font-size:14px}
+details.pnotes li{margin:6px 0}
+.row4.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.ckin{display:inline-flex;align-items:center;gap:6px;font-size:14px;min-height:44px;margin-right:auto}
+.ckin input{width:20px;height:20px}
+.edrow.catrow{grid-template-columns:2.4em minmax(0,1fr) auto;align-items:center}
+.catid{font:800 20px var(--serif);text-align:center}
+@media(max-width:600px){.row4.g3{grid-template-columns:repeat(2,minmax(0,1fr))}.edrow.catrow>.f:first-child{grid-column:auto}.edrow.catrow{grid-template-columns:2.4em minmax(0,1fr)}.edrow.catrow .edctl{grid-column:1/-1}}

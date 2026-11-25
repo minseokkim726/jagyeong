@@ -82,12 +82,14 @@ export function render(ctx) {
       ${inp(`virtues.${vi}.sub`, v.sub, { label: '부제' })}
       ${inp(`virtues.${vi}.model`, v.model, { label: '모델 인물' })}
       ${inp(`virtues.${vi}.pts`, v.pts, { label: '배점', num: true, step: '1' })}</div>
+      <div class="row4 g2">${inp(`virtues.${vi}.group`, v.group, { label: '묶음 제목 (선택)', ph: '바뀌는 자리에 표시' })}
+      <label class="f">원칙 문장 (선택, 한 줄에 한 문장)<textarea class="in" data-edlines="virtues.${vi}.creed" rows="${Math.max(2, (Array.isArray(v.creed) ? v.creed.length : 0) + 1)}">${esc((Array.isArray(v.creed) ? v.creed : []).join(String.fromCharCode(10)))}</textarea></label></div>
       <div class="edctl"><span class="note">덕목 순서·삭제</span>${ctl(`virtues.${vi}`, vi, vn, { delLabel: '덕목 삭제' })}</div>`;
       v.items.forEach((it, ii) => {
         h += `<div class="edrow">${inp(`virtues.${vi}.items.${ii}.t`, it.t, { label: it.kind === 'time' ? '유효시간 항목 문구' : '세부 실천 항목' })}
         ${inp(`virtues.${vi}.items.${ii}.h`, it.h, { label: '설명 (선택)' })}
         ${inp(`virtues.${vi}.items.${ii}.w`, it.w, { label: '가중치', num: true, step: '0.05', cls: 'f wcell' })}</div>
-        <div class="edctl">${it.kind === 'time' ? '<span class="tag">유효시간 · 삭제 불가</span>' : ''}${ctl(`virtues.${vi}.items.${ii}`, ii, v.items.length, { del: it.kind !== 'time', delLabel: '항목 삭제' })}
+        <div class="edctl">${it.kind === 'time' ? '<span class="tag">유효시간 · 삭제 불가</span>' : `<label class="ckin"><input type="checkbox" data-edck="virtues.${vi}.items.${ii}.streak"${it.streak ? ' checked' : ''}> 연속 기록</label>`}${ctl(`virtues.${vi}.items.${ii}`, ii, v.items.length, { del: it.kind !== 'time', delLabel: '항목 삭제' })}
         ${vn > 1 ? `<select class="in" data-moveitem="${vi}.${ii}" aria-label="다른 덕목으로 옮기기"><option value="">옮기기…</option>${V.virtues.map((o, oi) => (oi === vi ? '' : `<option value="${oi}">→ ${esc(o.name || oi + 1 + '번째 덕목')}</option>`)).join('')}</select>` : ''}</div>`;
       });
       h += `<div class="chips"><span class="note${Math.abs(ws - 1) > 0.001 ? ' err' : ''}" id="ws${vi}">가중치 합 ${fmt2(ws)}${Math.abs(ws - 1) > 0.001 ? ' · 1이 아님' : ''}</span>
@@ -109,6 +111,17 @@ export function render(ctx) {
   }
   h += '</section>';
 
+  const cats = Array.isArray(V.categories) ? V.categories : [];
+  h += `<section class="v ed">${fold('cats', op.has('cats'), `<b>블록 카테고리</b> <span class="note" id="catInfo">${cats.length ? `${cats.length}개` : '없음 · 오늘 화면에 칩이 안 보임'}</span>`)}`;
+  if (op.has('cats')) {
+    h += '<p class="note">오늘 화면의 시간 블록마다 고르는 칩입니다. 글자(A, B …)는 기록에 저장되는 이름표라 바꾸지 않습니다. 지운 카테고리를 고른 지난 블록은 추이에서 미분류로 셉니다.</p>';
+    cats.forEach((c, ci) => {
+      h += `<div class="edrow catrow"><span class="catid">${esc(c.id)}</span>${inp(`categories.${ci}.n`, c.n, { label: '이름' })}<div class="edctl">${ctl(`categories.${ci}`, ci, cats.length, { delLabel: '카테고리 삭제' })}</div></div>`;
+    });
+    h += '<div class="chips"><button type="button" class="chip" data-add="cat">+ 카테고리</button></div>';
+  }
+  h += '</section>';
+
   h += `<section class="v ed">${fold('scale', op.has('scale'), `<b>T 구간표</b> <span class="note">${V.tScale.length}줄</span>`)}`;
   if (op.has('scale')) {
     h += '<p class="note">T가 기준 이상인 첫 줄의 비율을 씁니다. 저장할 때 기준이 큰 순으로 정렬합니다. 비율은 0~1 (0.8 = 80%).</p>';
@@ -124,7 +137,7 @@ export function render(ctx) {
     const isOpen = op.has(g.id);
     h += `<section class="v ed">${fold(g.id, isOpen, `<b>${esc(g.name || gi + 1 + '번째 묶음')}</b> <span class="note">규칙 ${g.rules.length}개</span>`)}`;
     if (isOpen) {
-      h += `<div class="row4 g2">${inp(`passive.${gi}.name`, g.name, { label: '묶음 이름' })}${inp(`passive.${gi}.sub`, g.sub, { label: '부제' })}</div>
+      h += `<div class="row4 g3">${inp(`passive.${gi}.name`, g.name, { label: '묶음 이름' })}${inp(`passive.${gi}.sub`, g.sub, { label: '부제' })}${inp(`passive.${gi}.model`, g.model, { label: '모델 인물 (선택)' })}</div>
       <div class="edctl"><span class="note">묶음 순서·삭제</span>${ctl(`passive.${gi}`, gi, V.passive.length, { delLabel: '묶음 삭제' })}</div>`;
       g.rules.forEach((r, ri) => {
         h += `<div class="edrow rule">${inp(`passive.${gi}.rules.${ri}.t`, r.t, { label: `규칙 ${ri + 1}` })}</div><div class="edctl">${ctl(`passive.${gi}.rules.${ri}`, ri, g.rules.length, { delLabel: '규칙 삭제' })}</div>`;
@@ -217,6 +230,13 @@ export function click(t, ctx) {
     else if (ds.add === 'scale') V.tScale.push(['', '']);
     else if (ds.add === 'group') { const id = newId('p'); V.passive.push({ id, name: '새 묶음', sub: '', rules: [{ id: newId('p'), t: '' }] }); openSet(S).add(id); }
     else if (ds.add === 'rule') V.passive[+ds.gi].rules.push({ id: newId('p'), t: '' });
+    else if (ds.add === 'cat') {
+      V.categories = Array.isArray(V.categories) ? V.categories : [];
+      const used = new Set(V.categories.map((c) => c.id));
+      let id = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').find((x) => !used.has(x));
+      for (let i = 2; !id; i++) if (!used.has('C' + i)) id = 'C' + i;
+      V.categories.push({ id, n: '' });
+    }
     changed(ctx); return;
   }
   if (ds.norm !== undefined) {
@@ -233,6 +253,12 @@ export function click(t, ctx) {
 
 export function input(el, ctx) {
   const { S } = ctx;
+  if (el.dataset.edlines !== undefined && S.draft) {
+    // 덕목 원칙 문장: 줄마다 한 문장(빈 줄은 저장할 때 버린다)
+    setPath(S.draft, el.dataset.edlines, el.value.split(String.fromCharCode(10)));
+    el.rows = Math.max(2, el.value.split(String.fromCharCode(10)).length + 1);
+    changed(ctx, false); return;
+  }
   if (el.dataset.ed === undefined || !S.draft) return;
   setPath(S.draft, el.dataset.ed, el.dataset.num !== undefined ? (el.value === '' ? '' : +el.value) : el.value);
   el.removeAttribute('aria-invalid');
@@ -244,6 +270,11 @@ export function input(el, ctx) {
 export function change(el, ctx) {
   const { S } = ctx;
   if (el.id === 'applyToday') { S.applyToday = el.checked; return; }
+  if (el.dataset.edck && S.draft) {
+    const ks = el.dataset.edck.split('.'); const last = ks.pop(); const o = getPath(S.draft, ks.join('.'));
+    if (o) { if (el.checked) o[last] = true; else delete o[last]; }
+    changed(ctx, false); return;
+  }
   if (el.dataset.moveitem && el.value !== '') {
     const [vi, ii] = el.dataset.moveitem.split('.').map(Number); const to = +el.value;
     const [it] = S.draft.virtues[vi].items.splice(ii, 1);

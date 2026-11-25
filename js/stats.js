@@ -10,10 +10,11 @@ export function verOf(d, versions, cur) {
 }
 
 // 채점·생활 기록 없이 사명서 읽음만 있는 날은 "기록한 날"로 세지 않는다
+// 아침 입력(사명서 읽음·오늘의 A1)만 있는 날도 같다(v1.5)
 const isFilled = (o) => o && typeof o === 'object' && Object.keys(o).length > 0;
 export function isCreedOnly(d) {
-  if (!d || !d.creedAt) return false;
-  const has = isFilled(d.m) || isFilled(d.b) || isFilled(d.p) || isFilled(d.bt)
+  if (!d || !(d.creedAt || String(d.a1 || '').trim())) return false;
+  const has = isFilled(d.m) || isFilled(d.b) || isFilled(d.p) || isFilled(d.bt) || isFilled(d.bc) || isFilled(d.pm) || isFilled(d.menu)
     || (d.tOverride !== null && d.tOverride !== undefined && d.tOverride !== '') || (+d.tAdj || 0) !== 0
     || [d.kcal, d.steps, d.weight, d.drink].some((x) => x !== null && x !== undefined && x !== '')
     || !!String(d.memo || '').trim() || !!String(d.line || '').trim();
@@ -64,6 +65,7 @@ export function monthStats(days, versions, cur, ym, today) {
 }
 
 // 덕목별 달성률: 덕목 id가 같은 것끼리 합친다. 순서는 현재 버전 → 그 밖의 버전에서 처음 나온 순.
+// 배점과 무관하게 (받은 점수 ÷ 배점) / (만점 ÷ 배점)으로 합친다. 배점이 달라도 같은 표시면 같은 달성률.
 export function virtueRates(rec, curV) {
   const acc = new Map();
   const names = new Map();
@@ -71,7 +73,8 @@ export function virtueRates(rec, curV) {
   for (const x of rec) {
     for (const v of x.V.virtues) {
       if (!acc.has(v.id)) { acc.set(v.id, { r: 0, m: 0 }); names.set(v.id, v.short || v.name); }
-      const pv = x.s.per[v.id]; if (pv) { const a = acc.get(v.id); a.r += pv.r; a.m += pv.m; }
+      const pv = x.s.per[v.id], k = +v.pts > 0 ? +v.pts : 1;
+      if (pv) { const a = acc.get(v.id); a.r += pv.r / k; a.m += pv.m / k; }
     }
   }
   return [...acc.entries()].map(([id, a]) => ({ id, name: names.get(id), pct: a.m ? a.r / a.m * 100 : null }));
@@ -84,4 +87,83 @@ export function weekCells(days, versions, cur, today) {
     const k = addDays(wk, i), d = isRecorded(days[k]) ? days[k] : null;
     return { k, pct: d ? scoreDay(d, verOf(d, versions, cur).V).pct : null };
   });
+}
+
+// 이달 달성률 + 지난달 대비(%p). 지난달 기록이 없으면 대비 null.
+export function virtueRatesCompare(rec, prevRec, curV) {
+  const now = virtueRates(rec, curV);
+  if (!prevRec.length) return now.map((r) => ({ ...r, prev: null, delta: null }));
+  const prev = new Map(virtueRates(prevRec, curV).map((r) => [r.id, r.pct]));
+  return now.map((r) => {
+    const p = prev.has(r.id) ? prev.get(r.id) : null;
+    return { ...r, prev: p, delta: r.pct === null || p === null ? null : r.pct - p };
+  });
+}
+
+// ---------- v1.5: 카테고리 · 연속 기록 · Passive 메모 ----------
+const BLK = { o: 1, t: 0.5, x: 0 };
+export const UNCAT = '미분류';
+
+// 카테고리별 유효시간 = Σ(블록 T × 집중도 값). 고르지 않았거나 모르는 카테고리는 "미분류".
+// rec: [{ d, V }], curV: 이름·순서의 기준. 반환: [{ id, n, t }] (미분류는 id null, 맨 뒤)
+export function categoryTime(rec, curV) {
+  const order = [], names = new Map(), acc = new Map();
+  const add = (c) => { if (c && c.id != null && !names.has(c.id)) { names.set(c.id, c.n); order.push(c.id); acc.set(c.id, 0); } };
+  for (const c of (curV && curV.categories) || []) add(c);
+  let un = 0;
+  for (const { d, V } of rec) {
+    for (const c of V.categories || []) add(c);
+    for (const b of V.blocks || []) {
+      const m = d.b && d.b[b.id];
+      if (!(m in BLK)) continue;
+      const t = (+b.t || 0) * BLK[m];
+      const c = d.bc && d.bc[b.id];
+      if (c != null && names.has(c)) acc.set(c, acc.get(c) + t); else un += t;
+    }
+  }
+  const out = order.map((id) => ({ id, n: names.get(id), t: acc.get(id) }));
+  out.push({ id: null, n: UNCAT, t: un });
+  return out;
+}
+
+// 같은 날 유형의 가장 최근(그날보다 앞선) 기록 중 카테고리를 고른 날. 없으면 null.
+export function lastSameType(days, date, type) {
+  let best = null;
+  for (const [k, d] of Object.entries(days)) {
+    if (k >= date || !d || d.type !== type || !isFilled(d.bc)) continue;
+    if (!best || k > best) best = k;
+  }
+  return best;
+}
+
+// 항목 연속 기록. ○ = 이어짐, △·✕ = 끊김, –·미입력·기록 없는 날 = 건너뜀.
+// current: date부터 거꾸로, longest: 전체 기록에서. 항목 id 기준(버전 무관).
+export function itemStreak(days, itemId, date) {
+  const keys = Object.keys(days).sort();
+  let current = 0;
+  for (let i = keys.length - 1; i >= 0; i--) {
+    if (keys[i] > date) continue;
+    const m = days[keys[i]] && days[keys[i]].m && days[keys[i]].m[itemId];
+    if (m === 'o') current++;
+    else if (m === 't' || m === 'x') break;
+  }
+  let longest = 0, run = 0;
+  for (const k of keys) {
+    const m = days[k] && days[k].m && days[k].m[itemId];
+    if (m === 'o') { run++; if (run > longest) longest = run; }
+    else if (m === 't' || m === 'x') run = 0;
+  }
+  return { current, longest };
+}
+
+// 이달 Passive 위반 메모 목록(날짜순): △·✕ 이고 메모가 있는 것
+export function passiveNotes(rec) {
+  const out = [];
+  for (const { k, d, V } of rec) {
+    for (const g of V.passive || []) for (const r of g.rules || []) {
+      const mk = d.p && d.p[r.id], memo = String((d.pm || {})[r.id] || '').trim();
+      if ((mk === 't' || mk === 'x') && memo) out.push({ date: k, rule: r.t, mark: mk, memo });
+    }
+  }
+  return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }

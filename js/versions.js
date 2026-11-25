@@ -48,9 +48,20 @@ export function normalizeVersion(src) {
     }
     return o;
   });
-  V.virtues = (Array.isArray(V.virtues) ? V.virtues : []).map((v) => ({
-    ...v, pts: num(v.pts), items: (Array.isArray(v.items) ? v.items : []).map((it) => ({ ...it, w: num(it.w) })),
-  }));
+  V.virtues = (Array.isArray(V.virtues) ? V.virtues : []).map((v) => {
+    const o = { ...v, pts: num(v.pts), items: (Array.isArray(v.items) ? v.items : []).map((it) => ({ ...it, w: num(it.w) })) };
+    // 덕목 원칙 문장(배열). 줄바꿈 글로 와도 문장 배열로, 빈 문장은 버린다.
+    if (o.creed !== undefined) {
+      const arr = (Array.isArray(o.creed) ? o.creed : String(o.creed ?? '').split(/\r?\n/)).map((x) => String(x ?? '').trim()).filter(Boolean);
+      if (arr.length) o.creed = arr; else delete o.creed;
+    }
+    return o;
+  });
+  // 유효시간 블록 카테고리(선택)
+  if (V.categories !== undefined) {
+    if (Array.isArray(V.categories)) V.categories = V.categories.filter((c) => c && c.id != null).map((c) => ({ ...c, id: String(c.id), n: String(c.n ?? '') }));
+    else delete V.categories;
+  }
   V.passive = (Array.isArray(V.passive) ? V.passive : []).map((g) => ({ ...g, rules: Array.isArray(g.rules) ? g.rules : [] }));
   // 사명서 본문(선택). 없으면 기능을 숨긴다.
   if (V.creed && typeof V.creed === 'object') V.creed = { title: String(V.creed.title ?? ''), text: String(V.creed.text ?? '') };
